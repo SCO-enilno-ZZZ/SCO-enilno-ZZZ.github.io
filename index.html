@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>GitHub Raw Viewer</title>
+
+  <!-- highlight.js -->
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      background: #0d1117;
+      color: #c9d1d9;
+      font-family: monospace;
+    }
+    pre {
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+
+<pre><code id="code" class="language-python"></code></pre>
+
+<script>
+/* =========================
+   Utils
+========================= */
+
+const params = new URLSearchParams(window.location.search);
+const repo   = params.get("repo");     // owner/repo
+const commit = params.get("commit");   // hash or branch
+const path   = params.get("path");     // file path
+
+if (!repo || !commit || !path) {
+  document.body.textContent = "Missing repo, commit or path";
+  throw new Error("Invalid parameters");
+}
+
+const RAW_BASE = "https://raw.githubusercontent.com";
+
+/* In-memory cache */
+const fileCache = new Map();
+
+/* =========================
+   Method 1 – fetch + highlight
+========================= */
+
+async function fetchRawFile(repo, commit, path) {
+  const url = `${RAW_BASE}/${repo}/${commit}/${path}`;
+  if (fileCache.has(url)) return fileCache.get(url);
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Fetch failed: ${url}`);
+
+  const text = await res.text();
+  fileCache.set(url, text);
+  return text;
+}
+
+async function loadMainFile() {
+  const code = await fetchRawFile(repo, commit, path);
+  const el = document.getElementById("code");
+  el.textContent = code;
+  hljs.highlightElement(el);
+  return code;
+}
+
+/* =========================
+   Method 2 – Python import analysis
+========================= */
+
+/*
+  Very intentionally:
+  - No AST
+  - No execution
+  - Conservative resolution
+*/
+
+function extractPythonImports(code) {
+  const imports = new Set();
+
+  const lines = code.split("\n");
+  for (const line of lines) {
+    let m;
+
+    // import a.b.c
+    m = line.match(/^\s*import\s+([a-zA-Z0-9_.]+)/);
+    if (m) imports.add(m[1]);
+
+    // from a.b import c
+    m = line.match(/^\s*from\s+([a-zA-Z0-9_.]+)\s+import\s+/);
+    if (m) imports.add(m[1]);
+  }
+  return [...imports];
+}
+
+function resolveImportToPaths(importName, currentPath) {
+  /*
+    Example:
+      currentPath = pkg/sub/file.py
+      import pkg.utils
+  */
+
+  const baseDir = currentPath.split("/").slice(0, -1).join("/");
+
+  const relCandidates = [
+    `${importName.replace(/\./g, "/")}.py`,
+    `${importName.replace(/\./g, "/")}/__init__.py`,
+    `${baseDir}/${importName.replace(/\./g, "/")}.py`,
+    `${baseDir}/${importName.replace(/\./g, "/")}/__init__.py`,
+  ];
+
+  return [...new Set(relCandidates)];
+}
+
+async function preloadImportedFiles(mainCode) {
+  const imports = extractPythonImports(mainCode);
+
+  for (const imp of imports) {
+    const paths = resolveImportToPaths(imp, path);
+
+    for (const p of paths) {
+      try {
+        await fetchRawFile(repo, commit, p);
+        console.log("Loaded:", p);
+        break; // stop after first successful resolution
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/* =========================
+   Bootstrap
+========================= */
+
+(async () => {
+  try {
+    const mainCode = await loadMainFile();
+    await preloadImportedFiles(mainCode);
+
+    console.log("Cached files:", [...fileCache.keys()]);
+  } catch (e) {
+    console.error(e);
+  }
+})();
+</script>
+
+</body>
+</html>
