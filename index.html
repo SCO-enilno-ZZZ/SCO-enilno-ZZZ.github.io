@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>GitHub Raw Viewer</title>
+  <meta charset="UTF-8">
+  <title>GitHub Raw Python Viewer</title>
 
   <!-- highlight.js -->
   <link rel="stylesheet"
@@ -28,65 +28,61 @@
 <pre><code id="code" class="language-python"></code></pre>
 
 <script>
-/* =========================
-   Utils
-========================= */
+/* ===============================
+   Read query parameters
+================================ */
 
-const params = new URLSearchParams(window.location.search);
-const repo   = params.get("repo");     // owner/repo
-const commit = params.get("commit");   // hash or branch
-const path   = params.get("path");     // file path
+const params = new URLSearchParams(location.search);
+
+const repo   = params.get("repo");   // owner/repo
+const commit = params.get("commit"); // hash or branch
+const path   = params.get("path");   // file path
 
 if (!repo || !commit || !path) {
-  document.body.textContent = "Missing repo, commit or path";
-  throw new Error("Invalid parameters");
+  document.body.textContent =
+    "Missing query parameters: repo, commit, path";
+  throw new Error("Missing parameters");
 }
 
+/* ===============================
+   GitHub raw fetch + cache
+================================ */
+
 const RAW_BASE = "https://raw.githubusercontent.com";
+const cache = new Map();
 
-/* In-memory cache */
-const fileCache = new Map();
-
-/* =========================
-   Method 1 – fetch + highlight
-========================= */
-
-async function fetchRawFile(repo, commit, path) {
+async function fetchRaw(path) {
   const url = `${RAW_BASE}/${repo}/${commit}/${path}`;
-  if (fileCache.has(url)) return fileCache.get(url);
+  if (cache.has(url)) return cache.get(url);
 
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Fetch failed: ${url}`);
+  if (!res.ok) throw new Error(`404: ${url}`);
 
   const text = await res.text();
-  fileCache.set(url, text);
+  cache.set(url, text);
   return text;
 }
 
+/* ===============================
+   Method 1: Load & highlight
+================================ */
+
 async function loadMainFile() {
-  const code = await fetchRawFile(repo, commit, path);
+  const code = await fetchRaw(path);
   const el = document.getElementById("code");
   el.textContent = code;
   hljs.highlightElement(el);
   return code;
 }
 
-/* =========================
-   Method 2 – Python import analysis
-========================= */
-
-/*
-  Very intentionally:
-  - No AST
-  - No execution
-  - Conservative resolution
-*/
+/* ===============================
+   Method 2: Import analysis
+================================ */
 
 function extractPythonImports(code) {
   const imports = new Set();
 
-  const lines = code.split("\n");
-  for (const line of lines) {
+  for (const line of code.split("\n")) {
     let m;
 
     // import a.b.c
@@ -100,36 +96,28 @@ function extractPythonImports(code) {
   return [...imports];
 }
 
-function resolveImportToPaths(importName, currentPath) {
-  /*
-    Example:
-      currentPath = pkg/sub/file.py
-      import pkg.utils
-  */
-
+function resolveImport(importName, currentPath) {
   const baseDir = currentPath.split("/").slice(0, -1).join("/");
+  const rel = importName.replace(/\./g, "/");
 
-  const relCandidates = [
-    `${importName.replace(/\./g, "/")}.py`,
-    `${importName.replace(/\./g, "/")}/__init__.py`,
-    `${baseDir}/${importName.replace(/\./g, "/")}.py`,
-    `${baseDir}/${importName.replace(/\./g, "/")}/__init__.py`,
+  return [
+    `${rel}.py`,
+    `${rel}/__init__.py`,
+    `${baseDir}/${rel}.py`,
+    `${baseDir}/${rel}/__init__.py`
   ];
-
-  return [...new Set(relCandidates)];
 }
 
-async function preloadImportedFiles(mainCode) {
+async function preloadImports(mainCode) {
   const imports = extractPythonImports(mainCode);
 
   for (const imp of imports) {
-    const paths = resolveImportToPaths(imp, path);
-
-    for (const p of paths) {
+    const candidates = resolveImport(imp, path);
+    for (const p of candidates) {
       try {
-        await fetchRawFile(repo, commit, p);
-        console.log("Loaded:", p);
-        break; // stop after first successful resolution
+        await fetchRaw(p);
+        console.log("Loaded import:", p);
+        break;
       } catch {
         /* ignore */
       }
@@ -137,16 +125,15 @@ async function preloadImportedFiles(mainCode) {
   }
 }
 
-/* =========================
+/* ===============================
    Bootstrap
-========================= */
+================================ */
 
 (async () => {
   try {
     const mainCode = await loadMainFile();
-    await preloadImportedFiles(mainCode);
-
-    console.log("Cached files:", [...fileCache.keys()]);
+    await preloadImports(mainCode);
+    console.log("Cached files:", cache);
   } catch (e) {
     console.error(e);
   }
