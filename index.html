@@ -2,10 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Python Dependency Visualizer (Robust Parser)</title>
+  <title>Python Dependency Visualizer (Multi-Root Heuristic)</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <style>
+    /* Styling remains the same as the previous correct version */
     body { margin: 0; background: #0d1117; color: #c9d1d9; font-family: monospace; display: flex; height: 100vh; overflow: hidden; }
     #sidebar { width: 350px; background: #161b22; border-right: 1px solid #30363d; display: flex; flex-direction: column; }
     #sidebar-header { padding: 16px; border-bottom: 1px solid #30363d; background: #010409; }
@@ -75,81 +76,55 @@ async function fetchRaw(filePath) {
 
 function parseImports(code) {
   const results = [];
-  
-  // Step 1: Normalize code (remove comments, join multi-lines)
-  // We want to turn:
-  //    from x import (
-  //        y,
-  //        z
-  //    )
-  // Into: "from x import y, z"
-  
   const lines = code.split("\n");
   let buffer = "";
-  let inParens = false;
-  
   const logicalLines = [];
 
   for (let line of lines) {
-    // Strip comments
-    line = line.split("#")[0].trim();
+    line = line.split("#")[0].trim(); // Strip comments
     if (!line) continue;
 
     buffer += " " + line;
     
-    // Check parenthesis balance in the buffer
+    // Check parenthesis balance
     const openCount = (buffer.match(/\(/g) || []).length;
     const closeCount = (buffer.match(/\)/g) || []).length;
 
     if (openCount === closeCount) {
-      // Logical line complete
       if (buffer.trim()) logicalLines.push(buffer.trim());
       buffer = "";
     }
   }
 
-  // Step 2: Parse Logical Lines
   for (let line of logicalLines) {
-    // A. "from ... import ..."
-    // Regex: ^from ([\.\w]+) import (.*)
     let match = line.match(/^from\s+([\.\w]+)\s+import\s+(.*)/);
     
-    if (match) {
+    if (match) { // A. "from ... import ..."
       const source = match[1];
-      let targetsStr = match[2];
-      
-      // Clean up parentheses
-      targetsStr = targetsStr.replace(/[()]/g, ""); 
-      
-      // Split by comma: "x, y as z"
+      let targetsStr = match[2].replace(/[()]/g, ""); 
       const targets = targetsStr.split(",").map(t => t.trim());
       
-      // Determine level (dots)
       let level = 0;
       let module = source;
       const dots = source.match(/^(\.+)/);
       if (dots) {
         level = dots[1].length;
         module = source.substring(level); 
-        if (!module) module = null; // e.g. "from . import x" -> module=null
+        if (!module) module = null;
       }
 
       targets.forEach(t => {
-        // Remove aliases "x as y" -> "x"
         const cleanName = t.split(/\s+as\s+/)[0].trim();
-        if (cleanName) {
+        if (cleanName && cleanName !== '*') { // Ignore pure wildcards for resolution
            results.push({ module, name: cleanName, level });
         }
       });
       continue;
     }
 
-    // B. "import ..."
-    // Regex: ^import (.*)
     match = line.match(/^import\s+(.*)/);
-    if (match) {
+    if (match) { // B. "import ..."
       const targetsStr = match[1];
-      // Handle "import os, sys.path as sp"
       const targets = targetsStr.split(",").map(t => t.trim());
       
       targets.forEach(t => {
@@ -165,7 +140,7 @@ function parseImports(code) {
 }
 
 /* ===============================
-   3. RESOLUTION LOGIC
+   3. PATH RESOLUTION LOGIC (WITH MULTI-ROOT HEURISTIC)
 ================================ */
 
 function getDirname(p) {
@@ -177,50 +152,66 @@ function joinPath(...parts) {
   return parts.filter(p => p).join("/").replace(/\/+/g, "/");
 }
 
+/**
+ * Generates all potential base directories for an absolute import
+ * from the repo root up to the current file's directory.
+ * @param {string} currentFile - e.g. 'backend/services/user.py'
+ * @returns {string[]} - e.g. ['', 'backend', 'backend/services']
+ */
+function getPossibleRoots(currentFile) {
+    const dir = getDirname(currentFile);
+    const parts = dir.split('/').filter(p => p); // ['backend', 'services']
+    const roots = [""]; // Start with the actual repo root
+
+    for (let i = 0; i < parts.length; i++) {
+        const subpath = parts.slice(0, i + 1).join('/');
+        roots.push(subpath);
+    }
+    // Reverse for priority: start deep, then move shallower
+    return roots.reverse(); 
+}
+
 function generateCandidates(imp, currentFile) {
-  const candidates = [];
-  
-  // Base Dir
-  let baseDir = "";
-  if (imp.level > 0) {
-    baseDir = getDirname(currentFile);
-    for (let i = 1; i < imp.level; i++) baseDir = getDirname(baseDir);
-  }
+    const candidates = [];
+    const modParts = imp.module ? imp.module.split(".") : [];
+    
+    // Determine the set of base directories to check
+    let baseDirs = [];
+    if (imp.level > 0) {
+        // RELATIVE IMPORT: Only one base directory
+        let baseDir = getDirname(currentFile);
+        for (let i = 1; i < imp.level; i++) {
+            baseDir = getDirname(baseDir);
+        }
+        baseDirs.push(baseDir);
+    } else {
+        // ABSOLUTE IMPORT: Check all directories up to current file
+        baseDirs = getPossibleRoots(currentFile);
+    }
 
-  const modParts = imp.module ? imp.module.split(".") : [];
+    // Iterate through all possible roots/bases
+    for (const baseDir of baseDirs) {
+        // Priority 1: Check imported ITEM as a file (e.g., from pkg import Mod)
+        if (imp.name && imp.name !== "*") {
+            const fullParts = [...modParts, imp.name];
+            const path = joinPath(baseDir, ...fullParts);
+            candidates.push(`${path}.py`);
+            candidates.push(`${path}/__init__.py`);
+        }
 
-  // Priority 1: Check imported ITEM as a file
-  // Case: from pkg import Mod -> pkg/Mod.py
-  if (imp.name && imp.name !== "*") {
-    const fullParts = [...modParts, imp.name];
-    const path = joinPath(baseDir, ...fullParts);
-    candidates.push(`${path}.py`);
-    candidates.push(`${path}/__init__.py`);
-  }
-
-  // Priority 2: Check MODULE as a file
-  // Case: import pkg.Mod -> pkg/Mod.py
-  // Case: from pkg.Mod import x -> pkg/Mod.py (x is variable)
-  if (modParts.length > 0) {
-    const path = joinPath(baseDir, ...modParts);
-    candidates.push(`${path}.py`);
-    candidates.push(`${path}/__init__.py`);
-  }
-  
-  // Priority 3: Parent Package (for variables in init)
-  // Case: from pkg import x -> pkg/__init__.py (x is variable)
-  // Note: We only check this if module exists
-  if (imp.module && imp.name) {
-      // This is covered by Priority 2 implicitly if module is a folder
-      // But if module is "pkg", Priority 2 checks "pkg.py" and "pkg/__init__.py"
-      // So we are covered.
-  }
-
-  return candidates;
+        // Priority 2: Check MODULE as a file (e.g., import pkg.Mod)
+        if (modParts.length > 0) {
+            const path = joinPath(baseDir, ...modParts);
+            candidates.push(`${path}.py`);
+            candidates.push(`${path}/__init__.py`);
+        }
+    }
+    
+    return candidates;
 }
 
 /* ===============================
-   4. MAIN
+   4. MAIN EXECUTION
 ================================ */
 
 async function main() {
@@ -237,7 +228,7 @@ async function main() {
   
   if (!code) {
     statusEl.innerText = "Error: 404";
-    document.getElementById("code").innerText = "Could not find file.";
+    document.getElementById("code").innerText = `Could not find file at ${PATH}.`;
     return;
   }
 
@@ -248,31 +239,30 @@ async function main() {
   statusEl.innerText = "Analyzing imports...";
   const imports = parseImports(code);
   
-  // Run Check
   const checked = new Set();
 
   for (const imp of imports) {
     // UI Label
     let label = "";
-    if (imp.level === 0 && !imp.name) label = `import ${imp.module}`;
-    else {
-      const dots = ".".repeat(imp.level);
-      const mod = imp.module || "";
-      const nm = imp.name || "";
-      label = `from ${dots}${mod} import ${nm}`;
-    }
+    const dots = ".".repeat(imp.level);
+    const mod = imp.module || "";
+    const nm = imp.name || "";
+    
+    if (imp.level === 0 && !imp.name) label = `import ${mod}`;
+    else label = `from ${dots}${mod} import ${nm}`;
 
-    if (checked.has(label)) continue;
-    checked.add(label);
+    const uniqueKey = `${imp.level}|${imp.module}|${imp.name}`;
+    if (checked.has(uniqueKey)) continue;
+    checked.add(uniqueKey);
 
     const candidates = generateCandidates(imp, PATH);
     let html = `<span class="log-import">${label}</span>`;
     let found = false;
 
+    // Search and Fetch Candidates
     for (const cand of candidates) {
       html += `<span class="log-checking">${cand}</span>`;
       
-      // Check cache or fetch
       let exists = false;
       if (fileCache.has(`${RAW_BASE}/${REPO}/${COMMIT}/${cand}`)) exists = true;
       else {
