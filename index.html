@@ -2,9 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>GitHub Raw Python Viewer</title>
+  <title>GitHub Raw Python Viewer + Dependency Resolver</title>
 
-  <!-- highlight.js -->
   <link rel="stylesheet"
         href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -15,130 +14,306 @@
       background: #0d1117;
       color: #c9d1d9;
       font-family: monospace;
+      display: flex;
+      height: 100vh;
     }
-    pre {
-      margin: 0;
+    #sidebar {
+      width: 300px;
+      border-right: 1px solid #30363d;
       padding: 16px;
-      overflow: auto;
+      overflow-y: auto;
+      background: #161b22;
+      font-size: 13px;
     }
+    #content {
+      flex: 1;
+      overflow: auto;
+      padding: 16px;
+    }
+    pre { margin: 0; }
+    
+    /* Status Styles */
+    .status-item { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #30363d; }
+    .status-imp { color: #58a6ff; font-weight: bold; }
+    .status-found { color: #3fb950; }
+    .status-404 { color: #f85149; }
+    .status-lib { color: #8b949e; font-style: italic; }
   </style>
 </head>
 <body>
 
-<pre><code id="code" class="language-python"></code></pre>
+<div id="sidebar">
+  <h3>Dependency Resolution</h3>
+  <div id="log">Initializing...</div>
+</div>
+
+<div id="content">
+  <pre><code id="code" class="language-python"></code></pre>
+</div>
 
 <script>
 /* ===============================
-   Read query parameters
+   1. Configuration & Setup
 ================================ */
 
 const params = new URLSearchParams(location.search);
+const REPO   = params.get("repo");   // e.g. "psf/requests"
+const COMMIT = params.get("commit"); // e.g. "main"
+const PATH   = params.get("path");   // e.g. "src/requests/api.py"
 
-const repo   = params.get("repo");   // owner/repo
-const commit = params.get("commit"); // hash or branch
-const path   = params.get("path");   // file path
+// Output logs to sidebar
+const logEl = document.getElementById("log");
+function log(html) {
+  const div = document.createElement("div");
+  div.className = "status-item";
+  div.innerHTML = html;
+  logEl.appendChild(div);
+}
 
-if (!repo || !commit || !path) {
-  document.body.textContent =
-    "Missing query parameters: repo, commit, path";
+if (!REPO || !COMMIT || !PATH) {
+  document.body.innerHTML = "<h2 style='padding:20px'>Missing query params: ?repo=...&commit=...&path=...</h2>";
   throw new Error("Missing parameters");
 }
 
 /* ===============================
-   GitHub raw fetch + cache
+   2. GitHub Fetcher & Cache
 ================================ */
 
 const RAW_BASE = "https://raw.githubusercontent.com";
-const cache = new Map();
+const fileCache = new Map();
 
-async function fetchRaw(path) {
-  const url = `${RAW_BASE}/${repo}/${commit}/${path}`;
-  if (cache.has(url)) return cache.get(url);
+async function fetchRaw(filePath) {
+  const url = `${RAW_BASE}/${REPO}/${COMMIT}/${filePath}`;
+  
+  if (fileCache.has(url)) return fileCache.get(url);
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`404: ${url}`);
-
-  const text = await res.text();
-  cache.set(url, text);
-  return text;
-}
-
-/* ===============================
-   Method 1: Load & highlight
-================================ */
-
-async function loadMainFile() {
-  const code = await fetchRaw(path);
-  const el = document.getElementById("code");
-  el.textContent = code;
-  hljs.highlightElement(el);
-  return code;
-}
-
-/* ===============================
-   Method 2: Import analysis
-================================ */
-
-function extractPythonImports(code) {
-  const imports = new Set();
-
-  for (const line of code.split("\n")) {
-    let m;
-
-    // import a.b.c
-    m = line.match(/^\s*import\s+([a-zA-Z0-9_.]+)/);
-    if (m) imports.add(m[1]);
-
-    // from a.b import c
-    m = line.match(/^\s*from\s+([a-zA-Z0-9_.]+)\s+import\s+/);
-    if (m) imports.add(m[1]);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null; // Treat 404/500 as null (file not found)
+    const text = await res.text();
+    fileCache.set(url, text);
+    return text;
+  } catch (err) {
+    return null;
   }
-  return [...imports];
 }
 
-function resolveImport(importName, currentPath) {
-  const baseDir = currentPath.split("/").slice(0, -1).join("/");
-  const rel = importName.replace(/\./g, "/");
+/* ===============================
+   3. The Parser (Replaces AST)
+================================ */
 
-  return [
-    `${rel}.py`,
-    `${rel}/__init__.py`,
-    `${baseDir}/${rel}.py`,
-    `${baseDir}/${rel}/__init__.py`
-  ];
-}
+/**
+ * Parses Python code to find imports.
+ * Returns: Array of { module: string|null, name: string|null, level: int }
+ * * Handles:
+ * - import x.y
+ * - from x import y
+ * - from . import y
+ * - from ..x import y
+ */
+function parseImports(code) {
+  const results = [];
+  const lines = code.split("\n");
 
-async function preloadImports(mainCode) {
-  const imports = extractPythonImports(mainCode);
+  // Regex breakdown:
+  // ^\s* : Allow indentation
+  // (from|import) : Match keyword
+  // \s+           : Space
+  // ([\.\w]+)     : The path/dots (Capture Group 2)
+  // (?:.*import\s+([\w\.]+))? : Optional 'import name' part (Capture Group 3)
+  
+  const regex = /^\s*(from|import)\s+([\.\w]+)(?:\s+import\s+([\w,\s]+))?/;
 
-  for (const imp of imports) {
-    const candidates = resolveImport(imp, path);
-    for (const p of candidates) {
-      try {
-        await fetchRaw(p);
-        console.log("Loaded import:", p);
-        break;
-      } catch {
-        /* ignore */
-      }
+  for (let line of lines) {
+    // Remove comments
+    line = line.split("#")[0].trimEnd();
+    
+    const match = line.match(regex);
+    if (!match) continue;
+
+    const type = match[1];      // 'from' or 'import'
+    const source = match[2];    // e.g. 'os', '..utils', '.'
+    let targets = match[3];     // e.g. 'path', 'foo, bar'
+
+    let module = null;
+    let level = 0;
+
+    // A. Handle 'import x.y'
+    if (type === 'import') {
+      results.push({ module: source, name: null, level: 0 });
+      continue;
+    }
+
+    // B. Handle 'from ...'
+    // 1. Calculate Level (count leading dots)
+    const dotsMatch = source.match(/^(\.+)/);
+    if (dotsMatch) {
+      level = dotsMatch[1].length;
+      const remainder = source.substring(level);
+      module = remainder.length > 0 ? remainder : null;
+    } else {
+      level = 0;
+      module = source;
+    }
+
+    // 2. Handle Import Names (potentially multiple: "from x import a, b")
+    if (targets) {
+      // Clean up "foo as f, bar" -> ["foo", "bar"] (Ignoring aliases for resolution)
+      const names = targets.split(",").map(s => s.trim().split(" as ")[0]);
+      names.forEach(name => {
+        results.push({ module, name, level });
+      });
     }
   }
+  return results;
 }
 
 /* ===============================
-   Bootstrap
+   4. Path Logic (The Core Algo)
 ================================ */
 
-(async () => {
-  try {
-    const mainCode = await loadMainFile();
-    await preloadImports(mainCode);
-    console.log("Cached files:", cache);
-  } catch (e) {
-    console.error(e);
-  }
-})();
-</script>
+// Simulates Python's os.path.dirname
+function getDirname(p) {
+  if (!p.includes("/")) return ""; 
+  return p.substring(0, p.lastIndexOf("/"));
+}
 
+// Simulates os.path.join (simple version)
+function joinPath(...parts) {
+  return parts
+    .filter(p => p) // remove empty/null
+    .join("/")
+    .replace(/\/+/g, "/"); // normalize slashes
+}
+
+/**
+ * Generates the Exhaustive List of Candidates
+ * Mirrors the Python `generate_candidate_paths` logic.
+ */
+function generateCandidates(imp, currentFilePath) {
+  const candidates = [];
+  
+  // 1. Resolve Base Directory
+  let baseDir = "";
+  
+  if (imp.level > 0) {
+    // Relative: Start from current file's dir and go up
+    baseDir = getDirname(currentFilePath);
+    for (let i = 1; i < imp.level; i++) {
+      baseDir = getDirname(baseDir);
+    }
+  } else {
+    // Absolute: Start from Repo Root
+    // Optional: Detect 'src' layout here if needed. 
+    // For now, we assume Repo Root is base.
+    baseDir = ""; 
+  }
+
+  // 2. Construct logical path parts
+  const modParts = imp.module ? imp.module.split(".") : [];
+
+  // --- Priority 1: "from A import B" -> Is B a module/package? ---
+  if (imp.name) {
+    const fullParts = [...modParts, imp.name];
+    const basePath = joinPath(baseDir, ...fullParts);
+    
+    candidates.push(`${basePath}.py`);           // 1. root/A/B.py
+    candidates.push(`${basePath}/__init__.py`);  // 2. root/A/B/__init__.py
+  }
+
+  // --- Priority 2: "import A" or "from A import B" (checking A) ---
+  if (modParts.length > 0) {
+    const basePath = joinPath(baseDir, ...modParts);
+    
+    candidates.push(`${basePath}.py`);           // 3. root/A.py
+    candidates.push(`${basePath}/__init__.py`);  // 4. root/A/__init__.py
+  }
+
+  return candidates;
+}
+
+/* ===============================
+   5. Orchestration
+================================ */
+
+async function main() {
+  logEl.innerHTML = ""; // Clear log
+  log(`<div>Target: ${PATH}</div>`);
+
+  // 1. Load Main File
+  const mainCode = await fetchRaw(PATH);
+  if (!mainCode) {
+    log(`<span class="status-404">Error: Could not fetch main file.</span>`);
+    return;
+  }
+
+  // Render Code
+  const codeBlock = document.getElementById("code");
+  codeBlock.textContent = mainCode;
+  hljs.highlightElement(codeBlock);
+
+  // 2. Parse Imports
+  log("Scanning for imports...");
+  const imports = parseImports(mainCode);
+  log(`Found ${imports.length} import statements.`);
+
+  // 3. Resolve Dependencies
+  const resolved = new Set(); // To avoid duplicate logs
+
+  for (const imp of imports) {
+    // Construct readable name
+    let label = "";
+    if (imp.level > 0) label += ".".repeat(imp.level);
+    if (imp.module) label += imp.module;
+    if (imp.name) label += ` -> ${imp.name}`;
+
+    // Skip if we already checked this EXACT module+name combo
+    if (resolved.has(label)) continue;
+    resolved.add(label);
+
+    const candidates = generateCandidates(imp, PATH);
+    let found = false;
+    let foundPath = "";
+
+    // Try candidates in order
+    for (const cand of candidates) {
+      // Small optimization: don't re-fetch if we already cached it globally
+      if (fileCache.has(`${RAW_BASE}/${REPO}/${COMMIT}/${cand}`)) {
+         found = true;
+         foundPath = cand;
+         break;
+      }
+
+      // Fetch
+      const content = await fetchRaw(cand);
+      if (content) {
+        found = true;
+        foundPath = cand;
+        break;
+      }
+    }
+
+    // Logging Results
+    if (found) {
+      log(`
+        <span class="status-imp">import ${label}</span><br>
+        <span class="status-found">✔ Resolved: ${foundPath}</span>
+      `);
+    } else {
+      // If candidates is empty (rare) or all 404
+      log(`
+        <span class="status-imp">import ${label}</span><br>
+        <span class="status-lib">⚠ External Library or Built-in</span>
+      `);
+    }
+  }
+  
+  log("<br><strong>Done.</strong> Check 'Network' tab to see raw requests.");
+}
+
+// Start
+main();
+
+</script>
 </body>
 </html>
