@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Python Dependency Scraper + History</title>
+  <title>Python Dependency Scraper + Deep History</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <style>
@@ -22,12 +22,12 @@
     #content { 
       flex: 1; 
       display: flex;
-      flex-direction: column; /* Changed to column for top bar */
+      flex-direction: column; 
       overflow: hidden; 
       position: relative; 
     }
 
-    /* --- History Bar (New) --- */
+    /* --- History Bar --- */
     #history-bar {
       padding: 10px 20px;
       background: #161b22;
@@ -90,7 +90,7 @@
     #panel-resolver, #panel-tree {
       flex: 1;
       overflow-y: auto;
-      display: none; /* Controlled by JS */
+      display: none; 
     }
     #panel-resolver.active, #panel-tree.active {
       display: block;
@@ -161,6 +161,7 @@
     <strong>Navigation Tips:</strong><br>
     • Use <strong>Ctrl + Click</strong> on symbols in the code to find usages.<br>
     • Browse the <strong>File Tree</strong> below to switch files.
+    <strong>© 2025 QwQ Legacy, All rights reserved</strong><br>
   </div>
 
   <div id="sidebar-tabs">
@@ -199,12 +200,10 @@
    0. UI LOGIC (Tabs)
 ================================ */
 function switchTab(tabName) {
-  // Update Buttons
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   if(tabName === 'resolver') document.querySelector('.tab-btn:nth-child(1)').classList.add('active');
   else document.querySelector('.tab-btn:nth-child(2)').classList.add('active');
 
-  // Update Panels
   document.getElementById('panel-resolver').classList.remove('active');
   document.getElementById('panel-tree').classList.remove('active');
   document.getElementById(`panel-${tabName}`).classList.add('active');
@@ -218,15 +217,16 @@ const REPO   = params.get("repo");
 const COMMIT = params.get("commit");
 const PATH   = params.get("path");
 const ELEMENT_VIEW = params.get("element_view");
-const HISTORY_RAW = params.get("history");
 
-// Parse History
+// History Config
+const HISTORY_RAW = params.get("history");
+const ELEM_HIST_RAW = params.get("elem_view_history");
+
 let HISTORY = [];
-if (HISTORY_RAW) {
-  try {
-    HISTORY = JSON.parse(decodeURIComponent(HISTORY_RAW));
-  } catch (e) { HISTORY = []; }
-}
+if (HISTORY_RAW) { try { HISTORY = JSON.parse(decodeURIComponent(HISTORY_RAW)); } catch(e){ HISTORY=[]; } }
+
+let ELEM_HISTORY = [];
+if (ELEM_HIST_RAW) { try { ELEM_HISTORY = JSON.parse(decodeURIComponent(ELEM_HIST_RAW)); } catch(e){ ELEM_HISTORY=[]; } }
 
 const CORS_PROXY = "https://corsproxy.io/?";
 const RAW_BASE = "https://raw.githubusercontent.com";
@@ -251,17 +251,31 @@ function log(html) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-// --- HISTORY NAVIGATION ---
+// --- HISTORY NAVIGATION LOGIC ---
+
 function renderHistoryBar() {
   const bar = document.getElementById("history-bar");
   let html = "";
   
   // Render previous items
   HISTORY.forEach((histPath, index) => {
-    // Truncate history when clicking a previous item
+    // 1. Truncate History Lists
     const newHist = HISTORY.slice(0, index); 
+    const newElemHist = ELEM_HISTORY.slice(0, index);
+
+    // 2. Encode
     const encodedHist = encodeURIComponent(JSON.stringify(newHist));
-    const url = `?repo=${REPO}&commit=${COMMIT}&path=${histPath}&history=${encodedHist}`;
+    const encodedElemHist = encodeURIComponent(JSON.stringify(newElemHist));
+
+    // 3. Check if there was an element view saved for this step
+    const savedElemView = ELEM_HISTORY[index];
+    
+    let url = `?repo=${REPO}&commit=${COMMIT}&path=${histPath}&history=${encodedHist}&elem_view_history=${encodedElemHist}`;
+    
+    // 4. Restore element_view if valid (not placeholder)
+    if (savedElemView && savedElemView !== "-") {
+        url += `&element_view=${encodeURIComponent(savedElemView)}`;
+    }
     
     html += `<span class="hist-arrow">-></span> `;
     html += `<span class="hist-item" onclick="window.location.href='${url}'">${histPath}</span> `;
@@ -276,14 +290,24 @@ function renderHistoryBar() {
   bar.innerHTML = html || "<span class='hist-current'>Home</span>";
 }
 
-function navigateTo(newPath, elementLine = null) {
-  // Add current PATH to history before moving
+function navigateTo(newPath, nextElementLine = null) {
+  // 1. Push Current State to History
+  // Path history
   const newHist = [...HISTORY, PATH];
-  const encodedHist = encodeURIComponent(JSON.stringify(newHist));
   
-  let url = `?repo=${REPO}&commit=${COMMIT}&path=${newPath}&history=${encodedHist}`;
-  if (elementLine) {
-    url += `&element_view=${elementLine}`;
+  // Elem view history (use placeholder '-' if null)
+  const currentElemView = ELEMENT_VIEW || "-";
+  const newElemHist = [...ELEM_HISTORY, currentElemView];
+
+  // 2. Encode
+  const encodedHist = encodeURIComponent(JSON.stringify(newHist));
+  const encodedElemHist = encodeURIComponent(JSON.stringify(newElemHist));
+  
+  // 3. Construct URL
+  let url = `?repo=${REPO}&commit=${COMMIT}&path=${newPath}&history=${encodedHist}&elem_view_history=${encodedElemHist}`;
+  
+  if (nextElementLine) {
+    url += `&element_view=${nextElementLine}`;
   }
   window.location.href = url;
 }
@@ -372,7 +396,7 @@ function renderNode(node, depth) {
       });
     } else {
       row.addEventListener("click", () => {
-        // USE NAVIGATE FUNCTION TO PRESERVE HISTORY
+        // USE NAVIGATE FUNCTION
         navigateTo(child.path);
       });
     }
@@ -520,7 +544,7 @@ function showUsages(word, x, y) {
       resultsHtml += `<div class="usage-file">${path}</div>`;
       matches.forEach(m => {
         const encodedLine = encodeURIComponent(m.raw);
-        // USE NAVIGATE FUNCTION FOR HISTORY
+        // USE NAVIGATE FUNCTION
         resultsHtml += `<div class="usage-line" onclick="navigateTo('${path}', '${encodedLine}')"><span class="usage-line-num">${m.num}</span>${m.html}</div>`;
       });
     }
