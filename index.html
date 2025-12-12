@@ -2,23 +2,70 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Python Dependency Scraper (Cached)</title>
+  <title>Python Dependency Scraper + Usage Finder</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <style>
+    /* --- Layout & Base --- */
     body { margin: 0; background: #0d1117; color: #c9d1d9; font-family: monospace; display: flex; height: 100vh; overflow: hidden; }
     #sidebar { width: 380px; background: #161b22; border-right: 1px solid #30363d; display: flex; flex-direction: column; }
     #sidebar-header { padding: 16px; border-bottom: 1px solid #30363d; background: #010409; }
     #log { flex: 1; overflow-y: auto; padding: 10px; font-size: 12px; }
-    #content { flex: 1; overflow: auto; padding: 20px; }
+    #content { flex: 1; overflow: auto; padding: 20px; position: relative; }
     
-    /* Log Styles */
+    /* --- Log Styling --- */
     .log-entry { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #21262d; }
     .log-import { color: #79c0ff; font-weight: bold; display: block; margin-bottom: 2px; }
     .log-checking { color: #8b949e; display: block; margin-left: 12px; }
     .log-found { color: #3fb950; display: block; margin-left: 12px; font-weight: bold; }
-    .log-cached { color: #e3b341; display: block; margin-left: 12px; font-weight: bold; } /* New style for cache hit */
+    .log-cached { color: #e3b341; display: block; margin-left: 12px; font-weight: bold; }
     .log-lib { color: #d2a8ff; display: block; margin-left: 12px; font-style: italic; }
+
+    /* --- Usage Popup Styling --- */
+    #usage-popup {
+      display: none;
+      position: absolute;
+      background: #161b22;
+      border: 1px solid #30363d;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      border-radius: 6px;
+      max-width: 600px;
+      max-height: 400px;
+      overflow-y: auto;
+      z-index: 1000;
+      padding: 10px;
+      font-size: 12px;
+    }
+    .usage-header {
+      font-weight: bold;
+      color: #f0f6fc;
+      border-bottom: 1px solid #30363d;
+      padding-bottom: 6px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .usage-close { cursor: pointer; color: #ff7b72; }
+    .usage-file {
+      margin-top: 8px;
+      color: #79c0ff;
+      font-weight: bold;
+      background: #0d1117;
+      padding: 4px;
+      border-radius: 4px;
+    }
+    .usage-line {
+      display: block;
+      padding: 2px 8px;
+      color: #8b949e;
+      border-left: 2px solid #30363d;
+      margin-left: 4px;
+      white-space: pre-wrap;
+      cursor: pointer;
+    }
+    .usage-line:hover { background: #21262d; color: #c9d1d9; }
+    .usage-line-num { color: #6e7681; margin-right: 8px; user-select: none; }
+    .usage-match { color: #e3b341; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -33,11 +80,13 @@
 
 <div id="content">
   <pre><code id="code" class="language-python"></code></pre>
+  
+  <div id="usage-popup"></div>
 </div>
 
 <script>
 /* ===============================
-   1. GLOBAL CACHE & CONFIG
+   1. GLOBAL CONFIG
 ================================ */
 const params = new URLSearchParams(location.search);
 const REPO   = params.get("repo");
@@ -48,9 +97,16 @@ const CORS_PROXY = "https://corsproxy.io/?";
 const RAW_BASE = "https://raw.githubusercontent.com";
 
 // --- THE CACHE ---
-// Map<Path(string), Content(string)>
-// This is accessible in the console as window.projectFiles
 window.projectFiles = new Map();
+
+// --- KEYWORDS TO IGNORE ---
+const IGNORED_KEYWORDS = new Set([
+  "import", "from", "as", "def", "class", "return", "pass", "if", "elif", "else", 
+  "for", "while", "try", "except", "finally", "with", "lambda", "yield", "None", 
+  "True", "False", "and", "or", "not", "is", "in", "continue", "break", "raise",
+  "global", "nonlocal", "assert", "del", "async", "await", "print",
+  "=", "!=", "==", "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "(", ")", "[", "]", "{", "}", ":", ",", "."
+]);
 
 function log(html) {
   const div = document.createElement("div");
@@ -61,37 +117,29 @@ function log(html) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-/**
- * Smart Fetcher:
- * 1. Checks Cache first.
- * 2. Fetches via Proxy if missing.
- * 3. Saves to Cache if found.
- */
+/* ===============================
+   2. NETWORK & CACHE
+================================ */
+
 async function fetchAndCache(filePath) {
-  // 1. Check Cache
   if (window.projectFiles.has(filePath)) {
     return { content: window.projectFiles.get(filePath), cached: true };
   }
-
-  // 2. Network Request
   const targetUrl = `${RAW_BASE}/${REPO}/${COMMIT}/${filePath}`;
   const proxyUrl = CORS_PROXY + encodeURIComponent(targetUrl);
-
   try {
     const res = await fetch(proxyUrl);
     if (res.status === 200) {
       const text = await res.text();
-      // 3. Save to Cache
       window.projectFiles.set(filePath, text);
       return { content: text, cached: false };
     }
   } catch (e) { console.error(e); }
-  
   return { content: null, cached: false };
 }
 
 /* ===============================
-   2. ROBUST PARSER (Stateful)
+   3. PARSING LOGIC
 ================================ */
 
 function parseImports(code) {
@@ -100,7 +148,6 @@ function parseImports(code) {
   let buffer = "";
   const logicalLines = [];
 
-  // Group logical lines (handle parenthesis)
   for (let line of lines) {
     line = line.split("#")[0].trim(); 
     if (!line) continue;
@@ -113,9 +160,7 @@ function parseImports(code) {
     }
   }
 
-  // Regex Parsing
   for (let line of logicalLines) {
-    // A. "from ... import ..."
     let match = line.match(/^from\s+([\.\w]+)\s+import\s+(.*)/);
     if (match) { 
       const source = match[1];
@@ -130,7 +175,6 @@ function parseImports(code) {
         module = source.substring(level); 
         if (!module) module = null;
       }
-
       targets.forEach(t => {
         const cleanName = t.split(/\s+as\s+/)[0].trim();
         if (cleanName && cleanName !== '*') { 
@@ -139,8 +183,6 @@ function parseImports(code) {
       });
       continue;
     }
-
-    // B. "import ..."
     match = line.match(/^import\s+(.*)/);
     if (match) { 
       const targetsStr = match[1];
@@ -157,18 +199,16 @@ function parseImports(code) {
 }
 
 /* ===============================
-   3. PATH RESOLUTION (MULTI-ROOT)
+   4. PATH RESOLUTION
 ================================ */
 
 function getDirname(p) {
   if (!p.includes("/")) return ""; 
   return p.substring(0, p.lastIndexOf("/"));
 }
-
 function joinPath(...parts) {
   return parts.filter(p => p).join("/").replace(/\/+/g, "/");
 }
-
 function getPossibleRoots(currentFile) {
     const dir = getDirname(currentFile);
     const parts = dir.split('/').filter(p => p); 
@@ -179,11 +219,9 @@ function getPossibleRoots(currentFile) {
     }
     return roots.reverse(); 
 }
-
 function generateCandidates(imp, currentFile) {
     const candidates = [];
     const modParts = imp.module ? imp.module.split(".") : [];
-    
     let baseDirs = [];
     if (imp.level > 0) {
         let baseDir = getDirname(currentFile);
@@ -192,7 +230,6 @@ function generateCandidates(imp, currentFile) {
     } else {
         baseDirs = getPossibleRoots(currentFile);
     }
-
     for (const baseDir of baseDirs) {
         if (imp.name && imp.name !== "*") {
             const fullParts = [...modParts, imp.name];
@@ -210,7 +247,131 @@ function generateCandidates(imp, currentFile) {
 }
 
 /* ===============================
-   4. MAIN EXECUTION
+   5. USAGE SEARCH (CTRL + CLICK)
+================================ */
+
+function getWordAtClick(e) {
+  // Robustly extract the word under cursor using Range API
+  // This handles spaces, dots, parens, etc. as delimiters
+  if (document.caretRangeFromPoint) { // Standard
+    const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+    if (!range) return null;
+    return expandRangeToWord(range);
+  } else if (document.caretPositionFromPoint) { // Firefox
+    const pos = document.caretPositionFromPoint(e.clientX, e.clientY);
+    if (!pos) return null;
+    const range = document.createRange();
+    range.setStart(pos.offsetNode, pos.offset);
+    range.collapse(true);
+    return expandRangeToWord(range);
+  }
+  return null;
+}
+
+function expandRangeToWord(range) {
+  const node = range.startContainer;
+  const offset = range.startOffset;
+  
+  if (node.nodeType !== Node.TEXT_NODE) return null;
+  const text = node.textContent;
+  
+  // Define separators (non-word characters)
+  const isSeparator = (char) => /[^a-zA-Z0-9_]/.test(char);
+
+  let start = offset;
+  let end = offset;
+
+  // Move left
+  while (start > 0 && !isSeparator(text[start - 1])) {
+    start--;
+  }
+  // Move right
+  while (end < text.length && !isSeparator(text[end])) {
+    end++;
+  }
+
+  const word = text.substring(start, end).trim();
+  return word;
+}
+
+function showUsages(word, x, y) {
+  const popup = document.getElementById("usage-popup");
+  if (!word || IGNORED_KEYWORDS.has(word) || !isNaN(word)) {
+    popup.style.display = "none";
+    return;
+  }
+
+  // Search logic
+  let resultsHtml = `<div class="usage-header">
+                       <span>Usages of "${word}"</span>
+                       <span class="usage-close" onclick="document.getElementById('usage-popup').style.display='none'">✕</span>
+                     </div>`;
+  
+  let totalFound = 0;
+
+  // Iterate over all cached files
+  for (const [path, content] of window.projectFiles.entries()) {
+    const lines = content.split("\n");
+    const matches = [];
+
+    lines.forEach((line, index) => {
+      // Regex for Whole Word Match
+      const regex = new RegExp(`\\b${word}\\b`);
+      if (regex.test(line)) {
+        // Highlight the word in the preview line
+        const highlighted = line.replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                                .replace(regex, `<span class="usage-match">${word}</span>`);
+        matches.push({ num: index + 1, html: highlighted });
+      }
+    });
+
+    if (matches.length > 0) {
+      totalFound += matches.length;
+      resultsHtml += `<div class="usage-file">${path}</div>`;
+      matches.forEach(m => {
+        resultsHtml += `<div class="usage-line">
+                          <span class="usage-line-num">${m.num}</span>
+                          ${m.html}
+                        </div>`;
+      });
+    }
+  }
+
+  if (totalFound === 0) {
+    resultsHtml += `<div style="padding:10px; color:#8b949e">No other usages found in cached files.</div>`;
+  }
+
+  // Position and Show
+  popup.innerHTML = resultsHtml;
+  popup.style.display = "block";
+  popup.style.left = Math.min(x, window.innerWidth - 620) + "px"; // Prevent overflow right
+  popup.style.top = Math.min(y, window.innerHeight - 420) + "px"; // Prevent overflow bottom
+}
+
+// Bind Global Click Listener
+document.getElementById("code").addEventListener("click", (e) => {
+  // Only trigger on CTRL + Click
+  if (!e.ctrlKey && !e.metaKey) return; 
+
+  e.preventDefault();
+  const word = getWordAtClick(e);
+  
+  if (word) {
+    console.log("Searching for:", word);
+    showUsages(word, e.pageX, e.pageY);
+  }
+});
+
+// Close popup on click outside
+document.addEventListener("click", (e) => {
+  const popup = document.getElementById("usage-popup");
+  if (popup.style.display === "block" && !popup.contains(e.target) && !e.ctrlKey) {
+    popup.style.display = "none";
+  }
+});
+
+/* ===============================
+   6. MAIN EXECUTION
 ================================ */
 
 async function main() {
@@ -223,8 +384,6 @@ async function main() {
   }
 
   statusEl.innerText = "Fetching source...";
-  
-  // 1. Fetch & Cache Main File
   const mainResult = await fetchAndCache(PATH);
   
   if (!mainResult.content) {
@@ -233,7 +392,6 @@ async function main() {
     return;
   }
 
-  // Display
   document.getElementById("code").textContent = mainResult.content;
   hljs.highlightElement(document.getElementById("code"));
 
@@ -243,13 +401,11 @@ async function main() {
   const checkedImports = new Set();
 
   for (const imp of imports) {
-    // 2. Visualize Label
     const dots = ".".repeat(imp.level);
     const mod = imp.module || "";
     const nm = imp.name || "";
     const label = (imp.level === 0 && !imp.name) ? `import ${mod}` : `from ${dots}${mod} import ${nm}`;
 
-    // Dedup check logic (don't check same import twice in UI)
     const uniqueKey = `${imp.level}|${imp.module}|${imp.name}`;
     if (checkedImports.has(uniqueKey)) continue;
     checkedImports.add(uniqueKey);
@@ -258,14 +414,9 @@ async function main() {
     let html = `<span class="log-import">${label}</span>`;
     let found = false;
 
-    // 3. Search Candidates
     for (const cand of candidates) {
-      
-      // Attempt Fetch (or get from cache)
       const result = await fetchAndCache(cand);
-      
       if (result.content) {
-        // Success
         if (result.cached) {
             html += `<span class="log-cached">✔ CACHED: ${cand}</span>`;
         } else {
@@ -273,9 +424,8 @@ async function main() {
             html += `<span class="log-found">✔ FOUND</span>`;
         }
         found = true;
-        break; // Stop searching for this import
+        break; 
       } else {
-        // Failed
         html += `<span class="log-checking">${cand}</span>`;
       }
     }
@@ -284,10 +434,8 @@ async function main() {
     log(html);
   }
   
-  // Final Status
   const count = window.projectFiles.size;
-  statusEl.innerText = `Done. Cached ${count} files.`;
-  console.log("All cached files available in 'window.projectFiles':", window.projectFiles);
+  statusEl.innerText = `Done. Cached ${count} files. (Ctrl+Click symbols to find usages)`;
 }
 
 main();
