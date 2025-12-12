@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Python Dependency Scraper + Smart Usage Finder</title>
+  <title>Python Dependency Scraper + Smart Navigation</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <style>
@@ -11,8 +11,32 @@
     #sidebar { width: 380px; background: #161b22; border-right: 1px solid #30363d; display: flex; flex-direction: column; }
     #sidebar-header { padding: 16px; border-bottom: 1px solid #30363d; background: #010409; }
     #log { flex: 1; overflow-y: auto; padding: 10px; font-size: 12px; }
-    #content { flex: 1; overflow: auto; padding: 20px; position: relative; }
     
+    /* Content Container - Needs Relative for Absolute Positioning of Highlight */
+    #content { flex: 1; overflow: auto; padding: 20px; position: relative; scroll-behavior: smooth; }
+    
+    /* Code Styling - Enforce Line Height for Math Calculation */
+    pre { margin: 0; position: relative; z-index: 2; }
+    code { 
+        font-family: monospace; 
+        font-size: 14px; 
+        line-height: 20px !important; /* Fixed height is crucial for highlighting */
+        white-space: pre; /* No wrapping allows exact height calc */
+    }
+
+    /* --- Highlighter Strip --- */
+    #line-highlighter {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 20px; /* Matches code line-height */
+        background-color: rgba(210, 153, 34, 0.3); /* Yellowish transparent */
+        border-left: 4px solid #d29922;
+        pointer-events: none; /* Let clicks pass through to text */
+        z-index: 1; /* Behind text (if text z-index > 1) or blended */
+        display: none;
+    }
+
     /* --- Log Styling --- */
     .log-entry { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #21262d; }
     .log-import { color: #79c0ff; font-weight: bold; display: block; margin-bottom: 2px; }
@@ -21,50 +45,16 @@
     .log-cached { color: #e3b341; display: block; margin-left: 12px; font-weight: bold; }
     .log-lib { color: #d2a8ff; display: block; margin-left: 12px; font-style: italic; }
 
-    /* --- Usage Popup Styling (FIXED POSITIONING) --- */
+    /* --- Usage Popup --- */
     #usage-popup {
-      display: none;
-      position: fixed; /* Changed from absolute to fixed so it stays on screen */
-      background: #161b22;
-      border: 1px solid #30363d;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.7);
-      border-radius: 6px;
-      max-width: 600px;
-      max-height: 400px;
-      overflow-y: auto;
-      z-index: 9999; /* High z-index to sit on top of everything */
-      padding: 10px;
-      font-size: 12px;
+        display: none; position: fixed; background: #161b22; border: 1px solid #30363d;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.7); border-radius: 6px;
+        max-width: 600px; max-height: 400px; overflow-y: auto; z-index: 9999; padding: 10px; font-size: 12px;
     }
-    .usage-header {
-      font-weight: bold;
-      color: #f0f6fc;
-      border-bottom: 1px solid #30363d;
-      padding-bottom: 6px;
-      margin-bottom: 6px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
+    .usage-header { font-weight: bold; color: #f0f6fc; border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
     .usage-close { cursor: pointer; color: #ff7b72; font-size: 14px; font-weight: bold; padding: 0 4px; }
-    .usage-file {
-      margin-top: 8px;
-      color: #79c0ff;
-      font-weight: bold;
-      background: #0d1117;
-      padding: 4px 6px;
-      border-radius: 4px;
-      border: 1px solid #30363d;
-    }
-    .usage-line {
-      display: block;
-      padding: 4px 8px;
-      color: #8b949e;
-      border-left: 2px solid #30363d;
-      margin-left: 4px;
-      white-space: pre-wrap;
-      cursor: pointer;
-    }
+    .usage-file { margin-top: 8px; color: #79c0ff; font-weight: bold; background: #0d1117; padding: 4px 6px; border-radius: 4px; border: 1px solid #30363d; }
+    .usage-line { display: block; padding: 4px 8px; color: #8b949e; border-left: 2px solid #30363d; margin-left: 4px; white-space: pre-wrap; cursor: pointer; }
     .usage-line:hover { background: #21262d; color: #c9d1d9; border-left-color: #79c0ff; }
     .usage-line-num { color: #6e7681; margin-right: 8px; user-select: none; }
     .usage-match { color: #e3b341; font-weight: bold; background: rgba(227, 179, 65, 0.1); }
@@ -81,6 +71,8 @@
 </div>
 
 <div id="content">
+  <div id="line-highlighter"></div>
+  
   <pre><code id="code" class="language-python"></code></pre>
   
   <div id="usage-popup"></div>
@@ -94,6 +86,7 @@ const params = new URLSearchParams(location.search);
 const REPO   = params.get("repo");
 const COMMIT = params.get("commit");
 const PATH   = params.get("path");
+const ELEMENT_VIEW = params.get("element_view"); // New Parameter
 
 const CORS_PROXY = "https://corsproxy.io/?";
 const RAW_BASE = "https://raw.githubusercontent.com";
@@ -149,7 +142,6 @@ function parseImports(code) {
   const lines = code.split("\n");
   let buffer = "";
   const logicalLines = [];
-
   for (let line of lines) {
     line = line.split("#")[0].trim(); 
     if (!line) continue;
@@ -161,27 +153,18 @@ function parseImports(code) {
       buffer = "";
     }
   }
-
   for (let line of logicalLines) {
     let match = line.match(/^from\s+([\.\w]+)\s+import\s+(.*)/);
     if (match) { 
       const source = match[1];
       let targetsStr = match[2].replace(/[()]/g, ""); 
       const targets = targetsStr.split(",").map(t => t.trim());
-      
-      let level = 0;
-      let module = source;
+      let level = 0; let module = source;
       const dots = source.match(/^(\.+)/);
-      if (dots) {
-        level = dots[1].length;
-        module = source.substring(level); 
-        if (!module) module = null;
-      }
+      if (dots) { level = dots[1].length; module = source.substring(level); if (!module) module = null; }
       targets.forEach(t => {
         const cleanName = t.split(/\s+as\s+/)[0].trim();
-        if (cleanName && cleanName !== '*') { 
-           results.push({ module, name: cleanName, level });
-        }
+        if (cleanName && cleanName !== '*') results.push({ module, name: cleanName, level });
       });
       continue;
     }
@@ -191,9 +174,7 @@ function parseImports(code) {
       const targets = targetsStr.split(",").map(t => t.trim());
       targets.forEach(t => {
         const cleanName = t.split(/\s+as\s+/)[0].trim();
-        if (cleanName) {
-          results.push({ module: cleanName, name: null, level: 0 });
-        }
+        if (cleanName) results.push({ module: cleanName, name: null, level: 0 });
       });
     }
   }
@@ -204,21 +185,13 @@ function parseImports(code) {
    4. PATH RESOLUTION
 ================================ */
 
-function getDirname(p) {
-  if (!p.includes("/")) return ""; 
-  return p.substring(0, p.lastIndexOf("/"));
-}
-function joinPath(...parts) {
-  return parts.filter(p => p).join("/").replace(/\/+/g, "/");
-}
+function getDirname(p) { if (!p.includes("/")) return ""; return p.substring(0, p.lastIndexOf("/")); }
+function joinPath(...parts) { return parts.filter(p => p).join("/").replace(/\/+/g, "/"); }
 function getPossibleRoots(currentFile) {
     const dir = getDirname(currentFile);
     const parts = dir.split('/').filter(p => p); 
     const roots = [""]; 
-    for (let i = 0; i < parts.length; i++) {
-        const subpath = parts.slice(0, i + 1).join('/');
-        roots.push(subpath);
-    }
+    for (let i = 0; i < parts.length; i++) { roots.push(parts.slice(0, i + 1).join('/')); }
     return roots.reverse(); 
 }
 function generateCandidates(imp, currentFile) {
@@ -229,9 +202,7 @@ function generateCandidates(imp, currentFile) {
         let baseDir = getDirname(currentFile);
         for (let i = 1; i < imp.level; i++) baseDir = getDirname(baseDir);
         baseDirs.push(baseDir);
-    } else {
-        baseDirs = getPossibleRoots(currentFile);
-    }
+    } else { baseDirs = getPossibleRoots(currentFile); }
     for (const baseDir of baseDirs) {
         if (imp.name && imp.name !== "*") {
             const fullParts = [...modParts, imp.name];
@@ -249,7 +220,7 @@ function generateCandidates(imp, currentFile) {
 }
 
 /* ===============================
-   5. USAGE SEARCH (IMPROVED POSITIONING)
+   5. USAGE SEARCH & NAVIGATION
 ================================ */
 
 function getWordAtClick(e) {
@@ -267,8 +238,7 @@ function expandRangeToWord(range) {
   if (node.nodeType !== Node.TEXT_NODE) return null;
   const text = node.textContent;
   const isSeparator = (char) => /[^a-zA-Z0-9_]/.test(char);
-  let start = offset;
-  let end = offset;
+  let start = offset; let end = offset;
   while (start > 0 && !isSeparator(text[start - 1])) start--;
   while (end < text.length && !isSeparator(text[end])) end++;
   return text.substring(start, end).trim();
@@ -276,26 +246,20 @@ function expandRangeToWord(range) {
 
 function showUsages(word, x, y) {
   const popup = document.getElementById("usage-popup");
-  if (!word || IGNORED_KEYWORDS.has(word) || !isNaN(word)) {
-    popup.style.display = "none";
-    return;
-  }
+  if (!word || IGNORED_KEYWORDS.has(word) || !isNaN(word)) { popup.style.display = "none"; return; }
 
-  let resultsHtml = `<div class="usage-header">
-                       <span>Usages: "${word}"</span>
-                       <span class="usage-close" onclick="document.getElementById('usage-popup').style.display='none'">✕</span>
-                     </div>`;
-  
+  let resultsHtml = `<div class="usage-header"><span>Usages: "${word}"</span><span class="usage-close" onclick="document.getElementById('usage-popup').style.display='none'">✕</span></div>`;
   let totalFound = 0;
+
   for (const [path, content] of window.projectFiles.entries()) {
     const lines = content.split("\n");
     const matches = [];
     lines.forEach((line, index) => {
       const regex = new RegExp(`\\b${word}\\b`);
       if (regex.test(line)) {
-        const highlighted = line.replace(/</g, "&lt;").replace(/>/g, "&gt;")
-                                .replace(regex, `<span class="usage-match">${word}</span>`);
-        matches.push({ num: index + 1, html: highlighted });
+        // Highlighting for preview
+        const highlighted = line.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(regex, `<span class="usage-match">${word}</span>`);
+        matches.push({ num: index + 1, raw: line, html: highlighted });
       }
     });
 
@@ -303,59 +267,41 @@ function showUsages(word, x, y) {
       totalFound += matches.length;
       resultsHtml += `<div class="usage-file">${path}</div>`;
       matches.forEach(m => {
-        resultsHtml += `<div class="usage-line">
-                          <span class="usage-line-num">${m.num}</span>
-                          ${m.html}
+        // --- NEW: Add click handler to reload with element_view ---
+        const encodedLine = encodeURIComponent(m.raw);
+        const encodedPath = encodeURIComponent(path); // Note: PATH param usually raw, but let's be safe
+        // Construct new URL
+        const newUrl = `?repo=${REPO}&commit=${COMMIT}&path=${path}&element_view=${encodedLine}`;
+        
+        resultsHtml += `<div class="usage-line" onclick="window.location.href='${newUrl}'">
+                          <span class="usage-line-num">${m.num}</span>${m.html}
                         </div>`;
       });
     }
   }
 
-  if (totalFound === 0) {
-    resultsHtml += `<div style="padding:10px; color:#8b949e">No usages found in cached files.</div>`;
-  }
+  if (totalFound === 0) resultsHtml += `<div style="padding:10px; color:#8b949e">No usages found in cached files.</div>`;
 
-  // --- POSITIONING LOGIC ---
   popup.innerHTML = resultsHtml;
   popup.style.display = "block"; 
-  
-  // Measure dimensions after rendering
   const rect = popup.getBoundingClientRect();
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-
-  let finalX = x + 10; // Offset slightly to right
-  let finalY = y + 10; // Offset slightly down
-
-  // Right Edge Collision
-  if (finalX + rect.width > vw) {
-      finalX = vw - rect.width - 20;
-  }
-
-  // Bottom Edge Collision (Flip Up)
-  if (finalY + rect.height > vh) {
-      finalY = y - rect.height - 10;
-  }
-
-  popup.style.left = finalX + "px";
-  popup.style.top = finalY + "px";
+  const vw = window.innerWidth; const vh = window.innerHeight;
+  let finalX = x + 10; let finalY = y + 10;
+  if (finalX + rect.width > vw) finalX = vw - rect.width - 20;
+  if (finalY + rect.height > vh) finalY = y - rect.height - 10;
+  popup.style.left = finalX + "px"; popup.style.top = finalY + "px";
 }
 
 document.getElementById("code").addEventListener("click", (e) => {
   if (!e.ctrlKey && !e.metaKey) return; 
   e.preventDefault();
   const word = getWordAtClick(e);
-  if (word) {
-    // Pass clientX/Y which corresponds to screen coordinates, matching 'fixed' position
-    showUsages(word, e.clientX, e.clientY);
-  }
+  if (word) showUsages(word, e.clientX, e.clientY);
 });
 
 document.addEventListener("click", (e) => {
   const popup = document.getElementById("usage-popup");
-  if (popup.style.display === "block" && !popup.contains(e.target) && !e.ctrlKey) {
-    popup.style.display = "none";
-  }
+  if (popup.style.display === "block" && !popup.contains(e.target) && !e.ctrlKey) popup.style.display = "none";
 });
 
 /* ===============================
@@ -380,12 +326,45 @@ async function main() {
     return;
   }
 
+  // Render main file
   document.getElementById("code").textContent = mainResult.content;
   hljs.highlightElement(document.getElementById("code"));
 
+  // --- NEW: Handle ELEMENT_VIEW (Highlighting) ---
+  if (ELEMENT_VIEW) {
+      // Find the line index
+      const lines = mainResult.content.split("\n");
+      // Find exact match (or contains?). User said "full instance line" so we assume strict check on line content
+      // But URL params might lose trimming? Let's try flexible trim check.
+      let matchIndex = -1;
+      for (let i = 0; i < lines.length; i++) {
+          if (lines[i] === ELEMENT_VIEW) {
+              matchIndex = i;
+              break;
+          }
+      }
+
+      if (matchIndex !== -1) {
+          // Calculate offset (Line height set to 20px in CSS)
+          const LINE_HEIGHT = 20;
+          const topOffset = matchIndex * LINE_HEIGHT;
+
+          // Position the Highlighter Div
+          const highlighter = document.getElementById("line-highlighter");
+          highlighter.style.display = "block";
+          highlighter.style.top = (topOffset + 20) + "px"; // +20 for padding inside #content
+          
+          // Scroll to it
+          const contentDiv = document.getElementById("content");
+          contentDiv.scrollTop = topOffset - (contentDiv.clientHeight / 2); // Center it
+          
+          console.log(`Highlighting line ${matchIndex + 1}`);
+      }
+  }
+  // -----------------------------------------------
+
   statusEl.innerText = "Analyzing imports...";
   const imports = parseImports(mainResult.content);
-  
   const checkedImports = new Set();
 
   for (const imp of imports) {
@@ -405,19 +384,11 @@ async function main() {
     for (const cand of candidates) {
       const result = await fetchAndCache(cand);
       if (result.content) {
-        if (result.cached) {
-            html += `<span class="log-cached">✔ CACHED: ${cand}</span>`;
-        } else {
-            html += `<span class="log-checking">${cand}</span>`;
-            html += `<span class="log-found">✔ FOUND</span>`;
-        }
-        found = true;
-        break; 
-      } else {
-        html += `<span class="log-checking">${cand}</span>`;
-      }
+        if (result.cached) html += `<span class="log-cached">✔ CACHED: ${cand}</span>`;
+        else { html += `<span class="log-checking">${cand}</span>`; html += `<span class="log-found">✔ FOUND</span>`; }
+        found = true; break; 
+      } else { html += `<span class="log-checking">${cand}</span>`; }
     }
-
     if (!found) html += `<span class="log-lib">➡ Library / Built-in</span>`;
     log(html);
   }
