@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Python Dependency Scraper + Repo Browser</title>
+  <title>Python Dependency Scraper + History</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <style>
@@ -21,10 +21,34 @@
     /* --- Content Area (Right) --- */
     #content { 
       flex: 1; 
-      overflow: auto; 
-      padding: 20px; 
+      display: flex;
+      flex-direction: column; /* Changed to column for top bar */
+      overflow: hidden; 
       position: relative; 
-      scroll-behavior: smooth; 
+    }
+
+    /* --- History Bar (New) --- */
+    #history-bar {
+      padding: 10px 20px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      white-space: nowrap;
+      overflow-x: auto;
+      flex-shrink: 0;
+      font-size: 13px;
+    }
+    .hist-item { color: #8b949e; cursor: pointer; text-decoration: none; }
+    .hist-item:hover { color: #58a6ff; text-decoration: underline; }
+    .hist-arrow { color: #8b949e; margin: 0 5px; }
+    .hist-current { color: #c9d1d9; font-weight: bold; }
+
+    /* --- Scrollable Code Area --- */
+    #code-container {
+      flex: 1;
+      overflow: auto;
+      padding: 20px;
+      position: relative;
+      scroll-behavior: smooth;
     }
 
     /* --- Sidebar Header / Help Text --- */
@@ -160,8 +184,13 @@
 </div>
 
 <div id="content">
-  <div id="line-highlighter"></div>
-  <pre><code id="code" class="language-python"></code></pre>
+  <div id="history-bar"></div>
+
+  <div id="code-container">
+    <div id="line-highlighter"></div>
+    <pre><code id="code" class="language-python"></code></pre>
+  </div>
+  
   <div id="usage-popup"></div>
 </div>
 
@@ -182,13 +211,22 @@ function switchTab(tabName) {
 }
 
 /* ===============================
-   1. GLOBAL CONFIG
+   1. GLOBAL CONFIG & HISTORY
 ================================ */
 const params = new URLSearchParams(location.search);
 const REPO   = params.get("repo");
 const COMMIT = params.get("commit");
 const PATH   = params.get("path");
 const ELEMENT_VIEW = params.get("element_view");
+const HISTORY_RAW = params.get("history");
+
+// Parse History
+let HISTORY = [];
+if (HISTORY_RAW) {
+  try {
+    HISTORY = JSON.parse(decodeURIComponent(HISTORY_RAW));
+  } catch (e) { HISTORY = []; }
+}
 
 const CORS_PROXY = "https://corsproxy.io/?";
 const RAW_BASE = "https://raw.githubusercontent.com";
@@ -211,6 +249,43 @@ function log(html) {
   const logEl = document.getElementById("log");
   logEl.appendChild(div);
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+// --- HISTORY NAVIGATION ---
+function renderHistoryBar() {
+  const bar = document.getElementById("history-bar");
+  let html = "";
+  
+  // Render previous items
+  HISTORY.forEach((histPath, index) => {
+    // Truncate history when clicking a previous item
+    const newHist = HISTORY.slice(0, index); 
+    const encodedHist = encodeURIComponent(JSON.stringify(newHist));
+    const url = `?repo=${REPO}&commit=${COMMIT}&path=${histPath}&history=${encodedHist}`;
+    
+    html += `<span class="hist-arrow">-></span> `;
+    html += `<span class="hist-item" onclick="window.location.href='${url}'">${histPath}</span> `;
+  });
+
+  // Render current item
+  if(PATH) {
+    html += `<span class="hist-arrow">-></span> `;
+    html += `<span class="hist-current">${PATH}</span>`;
+  }
+
+  bar.innerHTML = html || "<span class='hist-current'>Home</span>";
+}
+
+function navigateTo(newPath, elementLine = null) {
+  // Add current PATH to history before moving
+  const newHist = [...HISTORY, PATH];
+  const encodedHist = encodeURIComponent(JSON.stringify(newHist));
+  
+  let url = `?repo=${REPO}&commit=${COMMIT}&path=${newPath}&history=${encodedHist}`;
+  if (elementLine) {
+    url += `&element_view=${elementLine}`;
+  }
+  window.location.href = url;
 }
 
 /* ===============================
@@ -297,8 +372,8 @@ function renderNode(node, depth) {
       });
     } else {
       row.addEventListener("click", () => {
-        const newUrl = `?repo=${REPO}&commit=${COMMIT}&path=${child.path}`;
-        window.location.href = newUrl;
+        // USE NAVIGATE FUNCTION TO PRESERVE HISTORY
+        navigateTo(child.path);
       });
     }
   });
@@ -445,8 +520,8 @@ function showUsages(word, x, y) {
       resultsHtml += `<div class="usage-file">${path}</div>`;
       matches.forEach(m => {
         const encodedLine = encodeURIComponent(m.raw);
-        const newUrl = `?repo=${REPO}&commit=${COMMIT}&path=${path}&element_view=${encodedLine}`;
-        resultsHtml += `<div class="usage-line" onclick="window.location.href='${newUrl}'"><span class="usage-line-num">${m.num}</span>${m.html}</div>`;
+        // USE NAVIGATE FUNCTION FOR HISTORY
+        resultsHtml += `<div class="usage-line" onclick="navigateTo('${path}', '${encodedLine}')"><span class="usage-line-num">${m.num}</span>${m.html}</div>`;
       });
     }
   }
@@ -479,6 +554,9 @@ document.addEventListener("click", (e) => {
 async function main() {
   const statusEl = document.getElementById("lbl-status");
   
+  // Render History Bar Immediately
+  renderHistoryBar();
+
   if (!REPO || !COMMIT || !PATH) {
     statusEl.innerText = "Error: Missing params";
     document.body.innerHTML += "<h2>Missing URL Params</h2>";
@@ -512,9 +590,9 @@ async function main() {
           const topOffset = matchIndex * LINE_HEIGHT;
           const highlighter = document.getElementById("line-highlighter");
           highlighter.style.display = "block";
-          highlighter.style.top = (topOffset + 20) + "px"; 
-          const contentDiv = document.getElementById("content");
-          contentDiv.scrollTop = topOffset - (contentDiv.clientHeight / 2); 
+          highlighter.style.top = (topOffset + 20) + "px"; // +20 for padding
+          const container = document.getElementById("code-container");
+          container.scrollTop = topOffset - (container.clientHeight / 2); 
       }
   }
 
