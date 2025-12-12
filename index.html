@@ -42,13 +42,30 @@
     .hist-arrow { color: #8b949e; margin: 0 5px; }
     .hist-current { color: #c9d1d9; font-weight: bold; }
 
-    /* --- Scrollable Code Area --- */
+    /* --- MODIFIED: Scrollable Code Area --- */
+    /* Changed to flex to align numbers and code side-by-side */
+    /* Removed padding from container to let gutter touch edges */
     #code-container {
       flex: 1;
       overflow: auto;
-      padding: 20px;
       position: relative;
       scroll-behavior: smooth;
+      display: flex; 
+    }
+
+    /* --- NEW: Line Numbers Gutter --- */
+    #line-numbers {
+      background: #0d1117;
+      border-right: 1px solid #30363d;
+      color: #6e7681;
+      text-align: right;
+      padding: 20px 10px; /* Top padding matches JS +20 offset */
+      font-family: monospace;
+      font-size: 14px;
+      line-height: 20px !important; /* STRICT SYNC */
+      user-select: none;
+      min-width: 40px;
+      flex-shrink: 0;
     }
 
     /* --- Sidebar Header / Help Text --- */
@@ -120,8 +137,14 @@
     }
     .arrow.open { transform: rotate(90deg); }
 
-    /* --- Code Styling --- */
-    pre { margin: 0; position: relative; z-index: 2; }
+    /* --- MODIFIED: Code Styling --- */
+    pre { 
+        margin: 0; 
+        position: relative; 
+        z-index: 2; 
+        padding: 20px; /* Top padding matches line-numbers */
+        flex: 1; /* Take remaining width */
+    }
     code { font-family: monospace; font-size: 14px; line-height: 20px !important; white-space: pre; }
 
     /* --- Highlighter --- */
@@ -158,9 +181,10 @@
 
 <div id="sidebar">
   <div id="sidebar-help">
+    <h2><strong>SCO enilno-ZZZ</strong></h2>
     <strong>Navigation Tips:</strong><br>
     • Use <strong>Ctrl + Click</strong> on symbols in the code to find usages.<br>
-    • Browse the <strong>File Tree</strong> below to switch files.
+    • Browse the <strong>File Tree</strong> below to switch files.<br><br>
     <strong>© 2025 QwQ Legacy, All rights reserved</strong><br>
   </div>
 
@@ -189,6 +213,7 @@
 
   <div id="code-container">
     <div id="line-highlighter"></div>
+    <div id="line-numbers"></div>
     <pre><code id="code" class="language-python"></code></pre>
   </div>
   
@@ -602,6 +627,15 @@ async function main() {
 
   document.getElementById("code").textContent = mainResult.content;
   hljs.highlightElement(document.getElementById("code"));
+
+  // --- NEW: Generate Line Numbers ---
+  const lineCount = mainResult.content.split(/\r\n|\r|\n/).length;
+  let linesHtml = "";
+  for (let i = 1; i <= lineCount; i++) {
+    linesHtml += `${i}\n`;
+  }
+  document.getElementById("line-numbers").innerText = linesHtml;
+  // ----------------------------------
 
   if (ELEMENT_VIEW) {
       const lines = mainResult.content.split("\n");
