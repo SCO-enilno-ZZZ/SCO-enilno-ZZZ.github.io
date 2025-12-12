@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Python Dependency Scraper + Usage Finder</title>
+  <title>Python Dependency Scraper + Smart Usage Finder</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <style>
@@ -21,18 +21,18 @@
     .log-cached { color: #e3b341; display: block; margin-left: 12px; font-weight: bold; }
     .log-lib { color: #d2a8ff; display: block; margin-left: 12px; font-style: italic; }
 
-    /* --- Usage Popup Styling --- */
+    /* --- Usage Popup Styling (FIXED POSITIONING) --- */
     #usage-popup {
       display: none;
-      position: absolute;
+      position: fixed; /* Changed from absolute to fixed so it stays on screen */
       background: #161b22;
       border: 1px solid #30363d;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.7);
       border-radius: 6px;
       max-width: 600px;
       max-height: 400px;
       overflow-y: auto;
-      z-index: 1000;
+      z-index: 9999; /* High z-index to sit on top of everything */
       padding: 10px;
       font-size: 12px;
     }
@@ -44,28 +44,30 @@
       margin-bottom: 6px;
       display: flex;
       justify-content: space-between;
+      align-items: center;
     }
-    .usage-close { cursor: pointer; color: #ff7b72; }
+    .usage-close { cursor: pointer; color: #ff7b72; font-size: 14px; font-weight: bold; padding: 0 4px; }
     .usage-file {
       margin-top: 8px;
       color: #79c0ff;
       font-weight: bold;
       background: #0d1117;
-      padding: 4px;
+      padding: 4px 6px;
       border-radius: 4px;
+      border: 1px solid #30363d;
     }
     .usage-line {
       display: block;
-      padding: 2px 8px;
+      padding: 4px 8px;
       color: #8b949e;
       border-left: 2px solid #30363d;
       margin-left: 4px;
       white-space: pre-wrap;
       cursor: pointer;
     }
-    .usage-line:hover { background: #21262d; color: #c9d1d9; }
+    .usage-line:hover { background: #21262d; color: #c9d1d9; border-left-color: #79c0ff; }
     .usage-line-num { color: #6e7681; margin-right: 8px; user-select: none; }
-    .usage-match { color: #e3b341; font-weight: bold; }
+    .usage-match { color: #e3b341; font-weight: bold; background: rgba(227, 179, 65, 0.1); }
   </style>
 </head>
 <body>
@@ -96,15 +98,15 @@ const PATH   = params.get("path");
 const CORS_PROXY = "https://corsproxy.io/?";
 const RAW_BASE = "https://raw.githubusercontent.com";
 
-// --- THE CACHE ---
+// Cache
 window.projectFiles = new Map();
 
-// --- KEYWORDS TO IGNORE ---
+// Filter Words
 const IGNORED_KEYWORDS = new Set([
   "import", "from", "as", "def", "class", "return", "pass", "if", "elif", "else", 
   "for", "while", "try", "except", "finally", "with", "lambda", "yield", "None", 
   "True", "False", "and", "or", "not", "is", "in", "continue", "break", "raise",
-  "global", "nonlocal", "assert", "del", "async", "await", "print",
+  "global", "nonlocal", "assert", "del", "async", "await", "print", "self", "super",
   "=", "!=", "==", "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "(", ")", "[", "]", "{", "}", ":", ",", "."
 ]);
 
@@ -247,22 +249,13 @@ function generateCandidates(imp, currentFile) {
 }
 
 /* ===============================
-   5. USAGE SEARCH (CTRL + CLICK)
+   5. USAGE SEARCH (IMPROVED POSITIONING)
 ================================ */
 
 function getWordAtClick(e) {
-  // Robustly extract the word under cursor using Range API
-  // This handles spaces, dots, parens, etc. as delimiters
-  if (document.caretRangeFromPoint) { // Standard
+  if (document.caretRangeFromPoint) {
     const range = document.caretRangeFromPoint(e.clientX, e.clientY);
     if (!range) return null;
-    return expandRangeToWord(range);
-  } else if (document.caretPositionFromPoint) { // Firefox
-    const pos = document.caretPositionFromPoint(e.clientX, e.clientY);
-    if (!pos) return null;
-    const range = document.createRange();
-    range.setStart(pos.offsetNode, pos.offset);
-    range.collapse(true);
     return expandRangeToWord(range);
   }
   return null;
@@ -271,27 +264,14 @@ function getWordAtClick(e) {
 function expandRangeToWord(range) {
   const node = range.startContainer;
   const offset = range.startOffset;
-  
   if (node.nodeType !== Node.TEXT_NODE) return null;
   const text = node.textContent;
-  
-  // Define separators (non-word characters)
   const isSeparator = (char) => /[^a-zA-Z0-9_]/.test(char);
-
   let start = offset;
   let end = offset;
-
-  // Move left
-  while (start > 0 && !isSeparator(text[start - 1])) {
-    start--;
-  }
-  // Move right
-  while (end < text.length && !isSeparator(text[end])) {
-    end++;
-  }
-
-  const word = text.substring(start, end).trim();
-  return word;
+  while (start > 0 && !isSeparator(text[start - 1])) start--;
+  while (end < text.length && !isSeparator(text[end])) end++;
+  return text.substring(start, end).trim();
 }
 
 function showUsages(word, x, y) {
@@ -301,24 +281,18 @@ function showUsages(word, x, y) {
     return;
   }
 
-  // Search logic
   let resultsHtml = `<div class="usage-header">
-                       <span>Usages of "${word}"</span>
+                       <span>Usages: "${word}"</span>
                        <span class="usage-close" onclick="document.getElementById('usage-popup').style.display='none'">✕</span>
                      </div>`;
   
   let totalFound = 0;
-
-  // Iterate over all cached files
   for (const [path, content] of window.projectFiles.entries()) {
     const lines = content.split("\n");
     const matches = [];
-
     lines.forEach((line, index) => {
-      // Regex for Whole Word Match
       const regex = new RegExp(`\\b${word}\\b`);
       if (regex.test(line)) {
-        // Highlight the word in the preview line
         const highlighted = line.replace(/</g, "&lt;").replace(/>/g, "&gt;")
                                 .replace(regex, `<span class="usage-match">${word}</span>`);
         matches.push({ num: index + 1, html: highlighted });
@@ -338,31 +312,45 @@ function showUsages(word, x, y) {
   }
 
   if (totalFound === 0) {
-    resultsHtml += `<div style="padding:10px; color:#8b949e">No other usages found in cached files.</div>`;
+    resultsHtml += `<div style="padding:10px; color:#8b949e">No usages found in cached files.</div>`;
   }
 
-  // Position and Show
+  // --- POSITIONING LOGIC ---
   popup.innerHTML = resultsHtml;
-  popup.style.display = "block";
-  popup.style.left = Math.min(x, window.innerWidth - 620) + "px"; // Prevent overflow right
-  popup.style.top = Math.min(y, window.innerHeight - 420) + "px"; // Prevent overflow bottom
+  popup.style.display = "block"; 
+  
+  // Measure dimensions after rendering
+  const rect = popup.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  let finalX = x + 10; // Offset slightly to right
+  let finalY = y + 10; // Offset slightly down
+
+  // Right Edge Collision
+  if (finalX + rect.width > vw) {
+      finalX = vw - rect.width - 20;
+  }
+
+  // Bottom Edge Collision (Flip Up)
+  if (finalY + rect.height > vh) {
+      finalY = y - rect.height - 10;
+  }
+
+  popup.style.left = finalX + "px";
+  popup.style.top = finalY + "px";
 }
 
-// Bind Global Click Listener
 document.getElementById("code").addEventListener("click", (e) => {
-  // Only trigger on CTRL + Click
   if (!e.ctrlKey && !e.metaKey) return; 
-
   e.preventDefault();
   const word = getWordAtClick(e);
-  
   if (word) {
-    console.log("Searching for:", word);
-    showUsages(word, e.pageX, e.pageY);
+    // Pass clientX/Y which corresponds to screen coordinates, matching 'fixed' position
+    showUsages(word, e.clientX, e.clientY);
   }
 });
 
-// Close popup on click outside
 document.addEventListener("click", (e) => {
   const popup = document.getElementById("usage-popup");
   if (popup.style.display === "block" && !popup.contains(e.target) && !e.ctrlKey) {
@@ -435,7 +423,7 @@ async function main() {
   }
   
   const count = window.projectFiles.size;
-  statusEl.innerText = `Done. Cached ${count} files. (Ctrl+Click symbols to find usages)`;
+  statusEl.innerText = `Done. Cached ${count} files. (Ctrl+Click symbols)`;
 }
 
 main();
