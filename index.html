@@ -13,8 +13,8 @@
     #sidebar { 
       width: 380px; 
       background: #161b22; 
-      border-right: 1px solid #30363d; /* Changed back to border-right */
-      display: flex; /* Always visible */
+      border-right: 1px solid #30363d; 
+      display: flex; 
       flex-direction: column; 
     }
     
@@ -26,6 +26,17 @@
       position: relative; 
       scroll-behavior: smooth; 
     }
+
+    /* --- Sidebar Header / Help Text --- */
+    #sidebar-help {
+      padding: 16px;
+      background: #010409;
+      border-bottom: 1px solid #30363d;
+      font-size: 12px;
+      color: #8b949e;
+      line-height: 1.4;
+    }
+    #sidebar-help strong { color: #c9d1d9; }
 
     /* --- Sidebar Tabs --- */
     #sidebar-tabs {
@@ -122,12 +133,18 @@
 <body>
 
 <div id="sidebar">
-  <div id="sidebar-tabs">
-    <button class="tab-btn active" onclick="switchTab('resolver')">Resolver</button>
-    <button class="tab-btn" onclick="switchTab('tree')">File Tree</button>
+  <div id="sidebar-help">
+    <strong>Navigation Tips:</strong><br>
+    • Use <strong>Ctrl + Click</strong> on symbols in the code to find usages.<br>
+    • Browse the <strong>File Tree</strong> below to switch files.
   </div>
 
-  <div id="panel-resolver" class="active">
+  <div id="sidebar-tabs">
+    <button class="tab-btn" onclick="switchTab('resolver')">Resolver</button>
+    <button class="tab-btn active" onclick="switchTab('tree')">File Tree</button>
+  </div>
+
+  <div id="panel-resolver">
     <div style="padding:10px; border-bottom:1px solid #30363d; background:#0d1117;">
       <small style="color:#8b949e">Analysis Log</small>
     </div>
@@ -135,7 +152,7 @@
     <div style="padding:10px; text-align:center; color:#8b949e" id="lbl-status">Initializing...</div>
   </div>
 
-  <div id="panel-tree">
+  <div id="panel-tree" class="active">
     <div id="tree-container" style="padding-bottom:20px;">
       <div style="padding:20px; color:#8b949e; text-align:center;">Loading tree...</div>
     </div>
