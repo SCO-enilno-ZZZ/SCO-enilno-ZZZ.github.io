@@ -9,7 +9,16 @@
     /* --- Layout & Base --- */
     body { margin: 0; background: #0d1117; color: #c9d1d9; font-family: monospace; display: flex; height: 100vh; overflow: hidden; }
     
-    /* --- Content Area --- */
+    /* --- Sidebar (Left) --- */
+    #sidebar { 
+      width: 380px; 
+      background: #161b22; 
+      border-right: 1px solid #30363d; /* Changed back to border-right */
+      display: flex; /* Always visible */
+      flex-direction: column; 
+    }
+    
+    /* --- Content Area (Right) --- */
     #content { 
       flex: 1; 
       overflow: auto; 
@@ -18,15 +27,6 @@
       scroll-behavior: smooth; 
     }
 
-    /* --- Sidebar (Right) --- */
-    #sidebar { 
-      width: 380px; 
-      background: #161b22; 
-      border-left: 1px solid #30363d; 
-      display: none; /* Hidden by default */
-      flex-direction: column; 
-    }
-    
     /* --- Sidebar Tabs --- */
     #sidebar-tabs {
       display: flex;
@@ -76,24 +76,14 @@
     .tree-item:hover { background: #21262d; }
     .tree-folder { color: #79c0ff; font-weight: bold; }
     .tree-file { color: #c9d1d9; }
-    .tree-indent { display: inline-block; width: 16px; }
     .folder-icon::before { content: "📁 "; opacity: 0.7; }
     .file-icon::before { content: "📄 "; opacity: 0.5; }
-    .tree-children { display: none; } /* Collapsed by default */
+    .tree-children { display: none; } 
     .tree-children.open { display: block; }
     .arrow {
         display: inline-block; width: 12px; font-size: 10px; color: #8b949e; transform: rotate(0deg); transition: transform 0.1s;
     }
     .arrow.open { transform: rotate(90deg); }
-
-
-    /* --- Toggle Button --- */
-    #toggle-btn {
-      position: fixed; top: 15px; right: 20px; z-index: 100;
-      background: #238636; color: white; border: 1px solid rgba(240,246,252,0.1);
-      border-radius: 6px; padding: 5px 10px; font-family: monospace; cursor: pointer; font-weight: bold;
-    }
-    #toggle-btn:hover { background: #2ea043; }
 
     /* --- Code Styling --- */
     pre { margin: 0; position: relative; z-index: 2; }
@@ -106,7 +96,7 @@
         pointer-events: none; z-index: 1; display: none;
     }
 
-    /* --- Log Log entries --- */
+    /* --- Log Entries --- */
     .log-entry { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #21262d; }
     .log-import { color: #79c0ff; font-weight: bold; display: block; margin-bottom: 2px; }
     .log-checking { color: #8b949e; display: block; margin-left: 12px; }
@@ -131,14 +121,6 @@
 </head>
 <body>
 
-<button id="toggle-btn" onclick="toggleSidebar()">Show Sidebar</button>
-
-<div id="content">
-  <div id="line-highlighter"></div>
-  <pre><code id="code" class="language-python"></code></pre>
-  <div id="usage-popup"></div>
-</div>
-
 <div id="sidebar">
   <div id="sidebar-tabs">
     <button class="tab-btn active" onclick="switchTab('resolver')">Resolver</button>
@@ -160,24 +142,16 @@
   </div>
 </div>
 
+<div id="content">
+  <div id="line-highlighter"></div>
+  <pre><code id="code" class="language-python"></code></pre>
+  <div id="usage-popup"></div>
+</div>
+
 <script>
 /* ===============================
-   0. UI LOGIC (Tabs & Sidebar)
+   0. UI LOGIC (Tabs)
 ================================ */
-function toggleSidebar() {
-  const sb = document.getElementById("sidebar");
-  const btn = document.getElementById("toggle-btn");
-  if (sb.style.display === "none" || sb.style.display === "") {
-    sb.style.display = "flex";
-    btn.textContent = "Hide Sidebar";
-    btn.style.right = "390px"; 
-  } else {
-    sb.style.display = "none";
-    btn.textContent = "Show Sidebar";
-    btn.style.right = "20px";
-  }
-}
-
 function switchTab(tabName) {
   // Update Buttons
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -233,14 +207,9 @@ async function loadRepoTree() {
     const res = await fetch(`${TREE_API}/${REPO}/${COMMIT}`);
     if(!res.ok) throw new Error("API Error");
     const data = await res.json();
-    
-    // Build Hierarchy
     const root = buildHierarchy(data.tree);
-    
-    // Render
-    container.innerHTML = ""; // Clear loading
+    container.innerHTML = ""; 
     container.appendChild(renderNode(root, 0));
-    
   } catch(e) {
     container.innerHTML = `<div style="padding:20px; color:#ff7b72;">Failed to load tree.<br>${e.message}</div>`;
   }
@@ -248,11 +217,9 @@ async function loadRepoTree() {
 
 function buildHierarchy(flatList) {
   const root = { name: "", type: "tree", children: {} };
-  
   flatList.forEach(item => {
     const parts = item.path.split('/');
     let current = root;
-    
     parts.forEach((part, index) => {
       if (!current.children[part]) {
         current.children[part] = {
@@ -270,8 +237,6 @@ function buildHierarchy(flatList) {
 
 function renderNode(node, depth) {
   const wrapper = document.createElement("div");
-  
-  // Sort: Folders first, then files
   const childrenKeys = Object.keys(node.children).sort((a, b) => {
     const nodeA = node.children[a];
     const nodeB = node.children[b];
@@ -282,37 +247,27 @@ function renderNode(node, depth) {
   childrenKeys.forEach(key => {
     const child = node.children[key];
     const isFolder = child.type === "tree";
-    
-    // Row
     const row = document.createElement("div");
     row.className = "tree-item";
-    if (isFolder) row.classList.add("tree-folder");
-    else row.classList.add("tree-file");
-    
-    // Indent
+    if (isFolder) row.classList.add("tree-folder"); else row.classList.add("tree-file");
     row.style.paddingLeft = (depth * 15 + 10) + "px";
     
-    // Icon & Name
     let html = "";
     if (isFolder) html += `<span class="arrow">▶</span> <span class="folder-icon">${child.name}</span>`;
     else html += `<span class="file-icon">${child.name}</span>`;
     row.innerHTML = html;
-
     wrapper.appendChild(row);
 
-    // Children Container (if folder)
     if (isFolder) {
       const childrenContainer = document.createElement("div");
       childrenContainer.className = "tree-children";
       childrenContainer.appendChild(renderNode(child, depth + 1));
       wrapper.appendChild(childrenContainer);
 
-      // Toggle Click
       row.addEventListener("click", (e) => {
         e.stopPropagation();
         const arrow = row.querySelector(".arrow");
         const isOpen = childrenContainer.classList.contains("open");
-        
         if (isOpen) {
           childrenContainer.classList.remove("open");
           arrow.classList.remove("open");
@@ -324,15 +279,12 @@ function renderNode(node, depth) {
         }
       });
     } else {
-      // File Click -> Reload
       row.addEventListener("click", () => {
-        // Construct new URL
         const newUrl = `?repo=${REPO}&commit=${COMMIT}&path=${child.path}`;
         window.location.href = newUrl;
       });
     }
   });
-
   return wrapper;
 }
 
