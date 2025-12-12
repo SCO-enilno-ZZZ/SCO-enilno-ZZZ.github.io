@@ -2,26 +2,57 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Python Dependency Scraper + Smart Navigation</title>
+  <title>Python Dependency Scraper</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <style>
     /* --- Layout & Base --- */
     body { margin: 0; background: #0d1117; color: #c9d1d9; font-family: monospace; display: flex; height: 100vh; overflow: hidden; }
-    #sidebar { width: 380px; background: #161b22; border-right: 1px solid #30363d; display: flex; flex-direction: column; }
+    
+    /* --- Content Area (Left/Center) --- */
+    #content { 
+      flex: 1; 
+      overflow: auto; 
+      padding: 20px; 
+      position: relative; 
+      scroll-behavior: smooth; 
+    }
+
+    /* --- Sidebar (Right) --- */
+    #sidebar { 
+      width: 380px; 
+      background: #161b22; 
+      border-left: 1px solid #30363d; /* Changed from border-right */
+      display: none; /* Hidden by default */
+      flex-direction: column; 
+    }
     #sidebar-header { padding: 16px; border-bottom: 1px solid #30363d; background: #010409; }
     #log { flex: 1; overflow-y: auto; padding: 10px; font-size: 12px; }
-    
-    /* Content Container - Needs Relative for Absolute Positioning of Highlight */
-    #content { flex: 1; overflow: auto; padding: 20px; position: relative; scroll-behavior: smooth; }
-    
-    /* Code Styling - Enforce Line Height for Math Calculation */
+
+    /* --- Toggle Button --- */
+    #toggle-btn {
+      position: fixed;
+      top: 15px;
+      right: 20px;
+      z-index: 100;
+      background: #238636;
+      color: white;
+      border: 1px solid rgba(240,246,252,0.1);
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-family: monospace;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    #toggle-btn:hover { background: #2ea043; }
+
+    /* --- Code Styling --- */
     pre { margin: 0; position: relative; z-index: 2; }
     code { 
         font-family: monospace; 
         font-size: 14px; 
-        line-height: 20px !important; /* Fixed height is crucial for highlighting */
-        white-space: pre; /* No wrapping allows exact height calc */
+        line-height: 20px !important; 
+        white-space: pre; 
     }
 
     /* --- Highlighter Strip --- */
@@ -29,11 +60,11 @@
         position: absolute;
         left: 0;
         right: 0;
-        height: 20px; /* Matches code line-height */
-        background-color: rgba(210, 153, 34, 0.3); /* Yellowish transparent */
+        height: 20px; 
+        background-color: rgba(210, 153, 34, 0.3); 
         border-left: 4px solid #d29922;
-        pointer-events: none; /* Let clicks pass through to text */
-        z-index: 1; /* Behind text (if text z-index > 1) or blended */
+        pointer-events: none; 
+        z-index: 1; 
         display: none;
     }
 
@@ -62,6 +93,14 @@
 </head>
 <body>
 
+<button id="toggle-btn" onclick="toggleSidebar()">Show Dependencies</button>
+
+<div id="content">
+  <div id="line-highlighter"></div>
+  <pre><code id="code" class="language-python"></code></pre>
+  <div id="usage-popup"></div>
+</div>
+
 <div id="sidebar">
   <div id="sidebar-header">
     <h3>Dependency Resolver</h3>
@@ -70,15 +109,24 @@
   <div id="log"></div>
 </div>
 
-<div id="content">
-  <div id="line-highlighter"></div>
-  
-  <pre><code id="code" class="language-python"></code></pre>
-  
-  <div id="usage-popup"></div>
-</div>
-
 <script>
+/* ===============================
+   0. UI LOGIC (Toggle Sidebar)
+================================ */
+function toggleSidebar() {
+  const sb = document.getElementById("sidebar");
+  const btn = document.getElementById("toggle-btn");
+  if (sb.style.display === "none" || sb.style.display === "") {
+    sb.style.display = "flex";
+    btn.textContent = "Hide Dependencies";
+    btn.style.right = "390px"; // Move button to not overlap sidebar
+  } else {
+    sb.style.display = "none";
+    btn.textContent = "Show Dependencies";
+    btn.style.right = "20px";
+  }
+}
+
 /* ===============================
    1. GLOBAL CONFIG
 ================================ */
@@ -86,15 +134,13 @@ const params = new URLSearchParams(location.search);
 const REPO   = params.get("repo");
 const COMMIT = params.get("commit");
 const PATH   = params.get("path");
-const ELEMENT_VIEW = params.get("element_view"); // New Parameter
+const ELEMENT_VIEW = params.get("element_view");
 
 const CORS_PROXY = "https://corsproxy.io/?";
 const RAW_BASE = "https://raw.githubusercontent.com";
 
-// Cache
 window.projectFiles = new Map();
 
-// Filter Words
 const IGNORED_KEYWORDS = new Set([
   "import", "from", "as", "def", "class", "return", "pass", "if", "elif", "else", 
   "for", "while", "try", "except", "finally", "with", "lambda", "yield", "None", 
@@ -115,7 +161,6 @@ function log(html) {
 /* ===============================
    2. NETWORK & CACHE
 ================================ */
-
 async function fetchAndCache(filePath) {
   if (window.projectFiles.has(filePath)) {
     return { content: window.projectFiles.get(filePath), cached: true };
@@ -136,7 +181,6 @@ async function fetchAndCache(filePath) {
 /* ===============================
    3. PARSING LOGIC
 ================================ */
-
 function parseImports(code) {
   const results = [];
   const lines = code.split("\n");
@@ -184,7 +228,6 @@ function parseImports(code) {
 /* ===============================
    4. PATH RESOLUTION
 ================================ */
-
 function getDirname(p) { if (!p.includes("/")) return ""; return p.substring(0, p.lastIndexOf("/")); }
 function joinPath(...parts) { return parts.filter(p => p).join("/").replace(/\/+/g, "/"); }
 function getPossibleRoots(currentFile) {
@@ -222,7 +265,6 @@ function generateCandidates(imp, currentFile) {
 /* ===============================
    5. USAGE SEARCH & NAVIGATION
 ================================ */
-
 function getWordAtClick(e) {
   if (document.caretRangeFromPoint) {
     const range = document.caretRangeFromPoint(e.clientX, e.clientY);
@@ -231,7 +273,6 @@ function getWordAtClick(e) {
   }
   return null;
 }
-
 function expandRangeToWord(range) {
   const node = range.startContainer;
   const offset = range.startOffset;
@@ -243,7 +284,6 @@ function expandRangeToWord(range) {
   while (end < text.length && !isSeparator(text[end])) end++;
   return text.substring(start, end).trim();
 }
-
 function showUsages(word, x, y) {
   const popup = document.getElementById("usage-popup");
   if (!word || IGNORED_KEYWORDS.has(word) || !isNaN(word)) { popup.style.display = "none"; return; }
@@ -257,7 +297,6 @@ function showUsages(word, x, y) {
     lines.forEach((line, index) => {
       const regex = new RegExp(`\\b${word}\\b`);
       if (regex.test(line)) {
-        // Highlighting for preview
         const highlighted = line.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(regex, `<span class="usage-match">${word}</span>`);
         matches.push({ num: index + 1, raw: line, html: highlighted });
       }
@@ -267,19 +306,12 @@ function showUsages(word, x, y) {
       totalFound += matches.length;
       resultsHtml += `<div class="usage-file">${path}</div>`;
       matches.forEach(m => {
-        // --- NEW: Add click handler to reload with element_view ---
         const encodedLine = encodeURIComponent(m.raw);
-        const encodedPath = encodeURIComponent(path); // Note: PATH param usually raw, but let's be safe
-        // Construct new URL
         const newUrl = `?repo=${REPO}&commit=${COMMIT}&path=${path}&element_view=${encodedLine}`;
-        
-        resultsHtml += `<div class="usage-line" onclick="window.location.href='${newUrl}'">
-                          <span class="usage-line-num">${m.num}</span>${m.html}
-                        </div>`;
+        resultsHtml += `<div class="usage-line" onclick="window.location.href='${newUrl}'"><span class="usage-line-num">${m.num}</span>${m.html}</div>`;
       });
     }
   }
-
   if (totalFound === 0) resultsHtml += `<div style="padding:10px; color:#8b949e">No usages found in cached files.</div>`;
 
   popup.innerHTML = resultsHtml;
@@ -298,7 +330,6 @@ document.getElementById("code").addEventListener("click", (e) => {
   const word = getWordAtClick(e);
   if (word) showUsages(word, e.clientX, e.clientY);
 });
-
 document.addEventListener("click", (e) => {
   const popup = document.getElementById("usage-popup");
   if (popup.style.display === "block" && !popup.contains(e.target) && !e.ctrlKey) popup.style.display = "none";
@@ -307,7 +338,6 @@ document.addEventListener("click", (e) => {
 /* ===============================
    6. MAIN EXECUTION
 ================================ */
-
 async function main() {
   const statusEl = document.getElementById("lbl-status");
   
@@ -326,42 +356,26 @@ async function main() {
     return;
   }
 
-  // Render main file
   document.getElementById("code").textContent = mainResult.content;
   hljs.highlightElement(document.getElementById("code"));
 
-  // --- NEW: Handle ELEMENT_VIEW (Highlighting) ---
+  // HIGHLIGHT LOGIC
   if (ELEMENT_VIEW) {
-      // Find the line index
       const lines = mainResult.content.split("\n");
-      // Find exact match (or contains?). User said "full instance line" so we assume strict check on line content
-      // But URL params might lose trimming? Let's try flexible trim check.
       let matchIndex = -1;
       for (let i = 0; i < lines.length; i++) {
-          if (lines[i] === ELEMENT_VIEW) {
-              matchIndex = i;
-              break;
-          }
+          if (lines[i] === ELEMENT_VIEW) { matchIndex = i; break; }
       }
-
       if (matchIndex !== -1) {
-          // Calculate offset (Line height set to 20px in CSS)
           const LINE_HEIGHT = 20;
           const topOffset = matchIndex * LINE_HEIGHT;
-
-          // Position the Highlighter Div
           const highlighter = document.getElementById("line-highlighter");
           highlighter.style.display = "block";
-          highlighter.style.top = (topOffset + 20) + "px"; // +20 for padding inside #content
-          
-          // Scroll to it
+          highlighter.style.top = (topOffset + 20) + "px"; 
           const contentDiv = document.getElementById("content");
-          contentDiv.scrollTop = topOffset - (contentDiv.clientHeight / 2); // Center it
-          
-          console.log(`Highlighting line ${matchIndex + 1}`);
+          contentDiv.scrollTop = topOffset - (contentDiv.clientHeight / 2); 
       }
   }
-  // -----------------------------------------------
 
   statusEl.innerText = "Analyzing imports...";
   const imports = parseImports(mainResult.content);
@@ -372,7 +386,6 @@ async function main() {
     const mod = imp.module || "";
     const nm = imp.name || "";
     const label = (imp.level === 0 && !imp.name) ? `import ${mod}` : `from ${dots}${mod} import ${nm}`;
-
     const uniqueKey = `${imp.level}|${imp.module}|${imp.name}`;
     if (checkedImports.has(uniqueKey)) continue;
     checkedImports.add(uniqueKey);
@@ -380,7 +393,6 @@ async function main() {
     const candidates = generateCandidates(imp, PATH);
     let html = `<span class="log-import">${label}</span>`;
     let found = false;
-
     for (const cand of candidates) {
       const result = await fetchAndCache(cand);
       if (result.content) {
@@ -394,11 +406,10 @@ async function main() {
   }
   
   const count = window.projectFiles.size;
-  statusEl.innerText = `Done. Cached ${count} files. (Ctrl+Click symbols)`;
+  statusEl.innerText = `Done. Cached ${count} files.`;
 }
 
 main();
-
 </script>
 </body>
 </html>
