@@ -71,24 +71,25 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
       display: flex; 
     }
 
-    /* --- SHARED TYPOGRAPHY (Crucial for alignment) --- */
+    /* --- SHARED TYPOGRAPHY --- */
     #line-numbers, code {
       font-family: "Menlo", "Consolas", "Monaco", "Liberation Mono", "Lucida Console", monospace;
       font-size: 14px;
       line-height: 20px !important; /* STRICT SYNC */
     }
 
-    /* --- NEW: Line Numbers Gutter --- */
+    /* --- LINE NUMBERS --- */
     #line-numbers {
       background: #0d1117;
       border-right: 1px solid #30363d;
       color: #6e7681;
       text-align: right;
-      padding: 20px 10px; /* Top padding must match 'pre' padding exactly */
+      /* 20px Top Padding matches 'pre' exactly */
+      padding: 20px 10px; 
       user-select: none;
       min-width: 40px;
       flex-shrink: 0;
-      box-sizing: border-box; /* Ensures padding doesn't affect calculation */
+      box-sizing: border-box;
     }
 
     /* --- Sidebar Header / Help Text --- */
@@ -160,19 +161,25 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
     }
     .arrow.open { transform: rotate(90deg); }
 
-    /* --- MODIFIED: Code Styling --- */
+    /* --- CODE CONTAINER --- */
     pre { 
       margin: 0; 
       position: relative; 
       z-index: 2; 
-      padding: 20px; /* Must match #line-numbers top padding */
+      /* 20px Top Padding matches #line-numbers exactly */
+      padding: 20px; 
       flex: 1; 
-      overflow: visible; /* Let container handle scroll */
+      overflow: visible;
     }
 
+    /* --- CODE ELEMENT OVERRIDES --- */
     code { 
-      display: block; /* Forces code to behave like lines, not inline text */
-      white-space: pre; /* Prevents wrapping which breaks alignment */
+      display: block; 
+      white-space: pre; 
+      padding: 0 !important; /* Remove Highlight.js default padding */
+      margin: 0 !important;  /* Ensure no margins push it down */
+      background: transparent !important; /* Prevent double-backgrounds */
+      border: none !important;
     }
 
     /* --- Highlighter --- */
