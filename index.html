@@ -71,19 +71,24 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
       display: flex; 
     }
 
+    /* --- SHARED TYPOGRAPHY (Crucial for alignment) --- */
+    #line-numbers, code {
+      font-family: "Menlo", "Consolas", "Monaco", "Liberation Mono", "Lucida Console", monospace;
+      font-size: 14px;
+      line-height: 20px !important; /* STRICT SYNC */
+    }
+
     /* --- NEW: Line Numbers Gutter --- */
     #line-numbers {
       background: #0d1117;
       border-right: 1px solid #30363d;
       color: #6e7681;
       text-align: right;
-      padding: 20px 10px; /* Top padding matches JS +20 offset */
-      font-family: monospace;
-      font-size: 14px;
-      line-height: 20px !important; /* STRICT SYNC */
+      padding: 20px 10px; /* Top padding must match 'pre' padding exactly */
       user-select: none;
       min-width: 40px;
       flex-shrink: 0;
+      box-sizing: border-box; /* Ensures padding doesn't affect calculation */
     }
 
     /* --- Sidebar Header / Help Text --- */
@@ -157,13 +162,18 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
     /* --- MODIFIED: Code Styling --- */
     pre { 
-        margin: 0; 
-        position: relative; 
-        z-index: 2; 
-        padding: 20px; /* Top padding matches line-numbers */
-        flex: 1; /* Take remaining width */
+      margin: 0; 
+      position: relative; 
+      z-index: 2; 
+      padding: 20px; /* Must match #line-numbers top padding */
+      flex: 1; 
+      overflow: visible; /* Let container handle scroll */
     }
-    code { font-family: monospace; font-size: 14px; line-height: 20px !important; white-space: pre; }
+
+    code { 
+      display: block; /* Forces code to behave like lines, not inline text */
+      white-space: pre; /* Prevents wrapping which breaks alignment */
+    }
 
     /* --- Highlighter --- */
     #line-highlighter {
@@ -647,7 +657,15 @@ async function main() {
   hljs.highlightElement(document.getElementById("code"));
 
   // --- NEW: Generate Line Numbers ---
-  const lineCount = mainResult.content.split(/\r\n|\r|\n/).length;
+  // Fix: If the last line is purely empty (trailing newline), don't count it
+  const lines = mainResult.content.split(/\r\n|\r|\n/);
+  let lineCount = lines.length;
+  
+  // Optional: Remove the last line number if the file ends with a newline
+  if (lines[lines.length - 1] === "") {
+    lineCount--;
+  }
+
   let linesHtml = "";
   for (let i = 1; i <= lineCount; i++) {
     linesHtml += `${i}\n`;
