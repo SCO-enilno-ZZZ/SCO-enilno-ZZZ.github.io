@@ -288,7 +288,7 @@ if (HISTORY_RAW) { try { HISTORY = JSON.parse(decodeURIComponent(HISTORY_RAW)); 
 let ELEM_HISTORY = [];
 if (ELEM_HIST_RAW) { try { ELEM_HISTORY = JSON.parse(decodeURIComponent(ELEM_HIST_RAW)); } catch(e){ ELEM_HISTORY=[]; } }
 
-const CORS_PROXY = "https://corsproxy.io/?";
+// const CORS_PROXY = "https://corsproxy.io/?";
 const RAW_BASE = "https://raw.githubusercontent.com";
 const TREE_API = "https://repo-tree-api-production.up.railway.app/api/tree";
 
@@ -472,7 +472,8 @@ async function fetchAndCache(filePath) {
     return { content: window.projectFiles.get(filePath), cached: true };
   }
   const targetUrl = `${RAW_BASE}/${REPO}/${COMMIT}/${filePath}`;
-  const proxyUrl = CORS_PROXY + encodeURIComponent(targetUrl);
+  // const proxyUrl = CORS_PROXY + encodeURIComponent(targetUrl);
+  const proxyUrl = targetUrl;
   try {
     const res = await fetch(proxyUrl);
     if (res.status === 200) {
