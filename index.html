@@ -1,0 +1,736 @@
+<!--
+Copyright (C) 2025 Chenail-Larcher, Zacharie; Mahmoudi, Brahim.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+-->
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Python Dependency Scraper + Deep History</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <style>
+    /* --- Layout & Base --- */
+    body { margin: 0; background: #0d1117; color: #c9d1d9; font-family: monospace; display: flex; height: 100vh; overflow: hidden; }
+    
+    /* --- Sidebar (Left) --- */
+    #sidebar { 
+      width: 380px; 
+      background: #161b22; 
+      border-right: 1px solid #30363d; 
+      display: flex; 
+      flex-direction: column; 
+    }
+    
+    /* --- Content Area (Right) --- */
+    #content { 
+      flex: 1; 
+      display: flex;
+      flex-direction: column; 
+      overflow: hidden; 
+      position: relative; 
+    }
+
+    /* --- History Bar --- */
+    #history-bar {
+      padding: 10px 20px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      white-space: nowrap;
+      overflow-x: auto;
+      flex-shrink: 0;
+      font-size: 13px;
+    }
+    .hist-item { color: #8b949e; cursor: pointer; text-decoration: none; }
+    .hist-item:hover { color: #58a6ff; text-decoration: underline; }
+    .hist-arrow { color: #8b949e; margin: 0 5px; }
+    .hist-current { color: #c9d1d9; font-weight: bold; }
+
+    /* --- MODIFIED: Scrollable Code Area --- */
+    /* Changed to flex to align numbers and code side-by-side */
+    /* Removed padding from container to let gutter touch edges */
+    #code-container {
+      flex: 1;
+      overflow: auto;
+      position: relative;
+      scroll-behavior: smooth;
+      display: flex; 
+    }
+
+    /* --- SHARED TYPOGRAPHY --- */
+    #line-numbers, code {
+      font-family: "Menlo", "Consolas", "Monaco", "Liberation Mono", "Lucida Console", monospace;
+      font-size: 14px;
+      line-height: 20px !important; /* STRICT SYNC */
+    }
+
+    /* --- LINE NUMBERS --- */
+    #line-numbers {
+      background: #0d1117;
+      border-right: 1px solid #30363d;
+      color: #6e7681;
+      text-align: right;
+      /* 20px Top Padding matches 'pre' exactly */
+      padding: 20px 10px; 
+      user-select: none;
+      min-width: 40px;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+
+    /* --- Sidebar Header / Help Text --- */
+    #sidebar-help {
+      padding: 16px;
+      background: #010409;
+      border-bottom: 1px solid #30363d;
+      font-size: 12px;
+      color: #8b949e;
+      line-height: 1.4;
+    }
+    #sidebar-help strong { color: #c9d1d9; }
+
+    /* --- Sidebar Tabs --- */
+    #sidebar-tabs {
+      display: flex;
+      border-bottom: 1px solid #30363d;
+      background: #010409;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 12px;
+      cursor: pointer;
+      text-align: center;
+      background: #010409;
+      color: #8b949e;
+      border: none;
+      border-bottom: 2px solid transparent;
+      font-family: monospace;
+      font-weight: bold;
+    }
+    .tab-btn:hover { color: #c9d1d9; }
+    .tab-btn.active {
+      color: #f0f6fc;
+      border-bottom: 2px solid #f78166; /* Git orange */
+    }
+
+    /* --- Sidebar Panels --- */
+    #panel-resolver, #panel-tree {
+      flex: 1;
+      overflow-y: auto;
+      display: none; 
+    }
+    #panel-resolver.active, #panel-tree.active {
+      display: block;
+    }
+    #log { padding: 10px; font-size: 12px; }
+
+    /* --- Tree View Styling --- */
+    .tree-item {
+      padding: 4px 8px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+    }
+    .tree-item:hover { background: #21262d; }
+    .tree-folder { color: #79c0ff; font-weight: bold; }
+    .tree-file { color: #c9d1d9; }
+    .folder-icon::before { content: "📁 "; opacity: 0.7; }
+    .file-icon::before { content: "📄 "; opacity: 0.5; }
+    .tree-children { display: none; } 
+    .tree-children.open { display: block; }
+    .arrow {
+        display: inline-block; width: 12px; font-size: 10px; color: #8b949e; transform: rotate(0deg); transition: transform 0.1s;
+    }
+    .arrow.open { transform: rotate(90deg); }
+
+    /* --- CODE CONTAINER --- */
+    pre { 
+      margin: 0; 
+      position: relative; 
+      z-index: 2; 
+      /* 20px Top Padding matches #line-numbers exactly */
+      padding: 20px; 
+      flex: 1; 
+      overflow: visible;
+    }
+
+    /* --- CODE ELEMENT OVERRIDES --- */
+    code { 
+      display: block; 
+      white-space: pre; 
+      padding: 0 !important; /* Remove Highlight.js default padding */
+      margin: 0 !important;  /* Ensure no margins push it down */
+      background: transparent !important; /* Prevent double-backgrounds */
+      border: none !important;
+    }
+
+    /* --- Highlighter --- */
+    #line-highlighter {
+        position: absolute; left: 0; right: 0; height: 20px; 
+        background-color: rgba(210, 153, 34, 0.3); border-left: 4px solid #d29922;
+        pointer-events: none; z-index: 1; display: none;
+    }
+
+    /* --- Log Entries --- */
+    .log-entry { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #21262d; }
+    .log-import { color: #79c0ff; font-weight: bold; display: block; margin-bottom: 2px; }
+    .log-checking { color: #8b949e; display: block; margin-left: 12px; }
+    .log-found { color: #3fb950; display: block; margin-left: 12px; font-weight: bold; }
+    .log-cached { color: #e3b341; display: block; margin-left: 12px; font-weight: bold; }
+    .log-lib { color: #d2a8ff; display: block; margin-left: 12px; font-style: italic; }
+
+    /* --- Usage Popup --- */
+    #usage-popup {
+        display: none; position: fixed; background: #161b22; border: 1px solid #30363d;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.7); border-radius: 6px;
+        max-width: 600px; max-height: 400px; overflow-y: auto; z-index: 9999; padding: 10px; font-size: 12px;
+    }
+    .usage-header { font-weight: bold; color: #f0f6fc; border-bottom: 1px solid #30363d; padding-bottom: 6px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+    .usage-close { cursor: pointer; color: #ff7b72; font-size: 14px; font-weight: bold; padding: 0 4px; }
+    .usage-file { margin-top: 8px; color: #79c0ff; font-weight: bold; background: #0d1117; padding: 4px 6px; border-radius: 4px; border: 1px solid #30363d; }
+    .usage-line { display: block; padding: 4px 8px; color: #8b949e; border-left: 2px solid #30363d; margin-left: 4px; white-space: pre-wrap; cursor: pointer; }
+    .usage-line:hover { background: #21262d; color: #c9d1d9; border-left-color: #79c0ff; }
+    .usage-line-num { color: #6e7681; margin-right: 8px; user-select: none; }
+    .usage-match { color: #e3b341; font-weight: bold; background: rgba(227, 179, 65, 0.1); }
+  </style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div id="sidebar-help">
+    <h2><strong>SCO enilno-ZZZ</strong></h2>
+    <strong>Navigation Tips:</strong><br>
+    • Use <strong>Ctrl + Click</strong> on symbols in the code to find usages.<br>
+    • Browse the <strong>File Tree</strong> below to switch files.<br><br>
+    <strong>© 2025 Chenail-Larcher, Zacharie; Mahmoudi, Brahim. All rights reserved.</strong><br>
+  </div>
+
+  <div id="sidebar-tabs">
+    <button class="tab-btn" onclick="switchTab('resolver')">Resolver</button>
+    <button class="tab-btn active" onclick="switchTab('tree')">File Tree</button>
+  </div>
+
+  <div id="panel-resolver">
+    <div style="padding:10px; border-bottom:1px solid #30363d; background:#0d1117;">
+      <small style="color:#8b949e">Analysis Log</small>
+    </div>
+    <div id="log"></div>
+    <div style="padding:10px; text-align:center; color:#8b949e" id="lbl-status">Initializing...</div>
+  </div>
+
+  <div id="panel-tree" class="active">
+    <div id="tree-container" style="padding-bottom:20px;">
+      <div style="padding:20px; color:#8b949e; text-align:center;">Loading tree...</div>
+    </div>
+  </div>
+</div>
+
+<div id="content">
+  <div id="history-bar"></div>
+
+  <div id="code-container">
+    <div id="line-highlighter"></div>
+    <div id="line-numbers"></div>
+    <pre><code id="code" class="language-python"></code></pre>
+  </div>
+  
+  <div id="usage-popup"></div>
+</div>
+
+<script>
+/* ===============================
+   0. UI LOGIC (Tabs)
+================================ */
+function switchTab(tabName) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  if(tabName === 'resolver') document.querySelector('.tab-btn:nth-child(1)').classList.add('active');
+  else document.querySelector('.tab-btn:nth-child(2)').classList.add('active');
+
+  document.getElementById('panel-resolver').classList.remove('active');
+  document.getElementById('panel-tree').classList.remove('active');
+  document.getElementById(`panel-${tabName}`).classList.add('active');
+}
+
+/* ===============================
+   1. GLOBAL CONFIG & HISTORY
+================================ */
+const params = new URLSearchParams(location.search);
+const REPO   = params.get("repo");
+const COMMIT = params.get("commit");
+const PATH   = params.get("path");
+const ELEMENT_VIEW = params.get("element_view");
+
+// History Config
+const HISTORY_RAW = params.get("history");
+const ELEM_HIST_RAW = params.get("elem_view_history");
+
+let HISTORY = [];
+if (HISTORY_RAW) { try { HISTORY = JSON.parse(decodeURIComponent(HISTORY_RAW)); } catch(e){ HISTORY=[]; } }
+
+let ELEM_HISTORY = [];
+if (ELEM_HIST_RAW) { try { ELEM_HISTORY = JSON.parse(decodeURIComponent(ELEM_HIST_RAW)); } catch(e){ ELEM_HISTORY=[]; } }
+
+// const CORS_PROXY = "https://corsproxy.io/?";
+const RAW_BASE = "https://raw.githubusercontent.com";
+const TREE_API = "https://repo-tree-api-production.up.railway.app/api/tree";
+
+window.projectFiles = new Map();
+
+const IGNORED_KEYWORDS = new Set([
+  "import", "from", "as", "def", "class", "return", "pass", "if", "elif", "else", 
+  "for", "while", "try", "except", "finally", "with", "lambda", "yield", "None", 
+  "True", "False", "and", "or", "not", "is", "in", "continue", "break", "raise",
+  "global", "nonlocal", "assert", "del", "async", "await", "print", "self", "super",
+  "=", "!=", "==", "+", "-", "*", "/", "%", "<", ">", "<=", ">=", "(", ")", "[", "]", "{", "}", ":", ",", "."
+]);
+
+function log(html) {
+  const div = document.createElement("div");
+  div.className = "log-entry";
+  div.innerHTML = html;
+  const logEl = document.getElementById("log");
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// --- HISTORY NAVIGATION LOGIC ---
+
+function renderHistoryBar() {
+  const bar = document.getElementById("history-bar");
+  let html = "";
+  
+  // Render previous items
+  HISTORY.forEach((histPath, index) => {
+    // 1. Truncate History Lists
+    const newHist = HISTORY.slice(0, index); 
+    const newElemHist = ELEM_HISTORY.slice(0, index);
+
+    // 2. Encode
+    const encodedHist = encodeURIComponent(JSON.stringify(newHist));
+    const encodedElemHist = encodeURIComponent(JSON.stringify(newElemHist));
+
+    // 3. Check if there was an element view saved for this step
+    const savedElemView = ELEM_HISTORY[index];
+    
+    let url = `?repo=${REPO}&commit=${COMMIT}&path=${histPath}&history=${encodedHist}&elem_view_history=${encodedElemHist}`;
+    
+    // 4. Restore element_view if valid (not placeholder)
+    if (savedElemView && savedElemView !== "-") {
+        url += `&element_view=${encodeURIComponent(savedElemView)}`;
+    }
+    
+    html += `<span class="hist-arrow">-></span> `;
+    html += `<span class="hist-item" onclick="window.location.href='${url}'">${histPath}</span> `;
+  });
+
+  // Render current item
+  if(PATH) {
+    html += `<span class="hist-arrow">-></span> `;
+    html += `<span class="hist-current">${PATH}</span>`;
+  }
+
+  bar.innerHTML = html || "<span class='hist-current'>Home</span>";
+}
+
+function navigateTo(newPath, nextElementLine = null) {
+  // 1. Push Current State to History
+  // Path history
+  const newHist = [...HISTORY, PATH];
+  
+  // Elem view history (use placeholder '-' if null)
+  const currentElemView = ELEMENT_VIEW || "-";
+  const newElemHist = [...ELEM_HISTORY, currentElemView];
+
+  // 2. Encode
+  const encodedHist = encodeURIComponent(JSON.stringify(newHist));
+  const encodedElemHist = encodeURIComponent(JSON.stringify(newElemHist));
+  
+  // 3. Construct URL
+  let url = `?repo=${REPO}&commit=${COMMIT}&path=${newPath}&history=${encodedHist}&elem_view_history=${encodedElemHist}`;
+  
+  if (nextElementLine) {
+    url += `&element_view=${nextElementLine}`;
+  }
+  window.location.href = url;
+}
+
+/* ===============================
+   2. REPO TREE FETCH & RENDER
+================================ */
+async function loadRepoTree() {
+  if(!REPO || !COMMIT) return;
+  const container = document.getElementById("tree-container");
+  
+  try {
+    const res = await fetch(`${TREE_API}/${REPO}/${COMMIT}`);
+    if(!res.ok) throw new Error("API Error");
+    const data = await res.json();
+    const root = buildHierarchy(data.tree);
+    container.innerHTML = ""; 
+    container.appendChild(renderNode(root, 0));
+  } catch(e) {
+    container.innerHTML = `<div style="padding:20px; color:#ff7b72;">Failed to load tree.<br>${e.message}</div>`;
+  }
+}
+
+function buildHierarchy(flatList) {
+  const root = { name: "", type: "tree", children: {} };
+  flatList.forEach(item => {
+    const parts = item.path.split('/');
+    let current = root;
+    parts.forEach((part, index) => {
+      if (!current.children[part]) {
+        current.children[part] = {
+          name: part,
+          path: parts.slice(0, index+1).join('/'),
+          type: (index === parts.length - 1) ? item.type : "tree",
+          children: {}
+        };
+      }
+      current = current.children[part];
+    });
+  });
+  return root;
+}
+
+function renderNode(node, depth) {
+  const wrapper = document.createElement("div");
+  const childrenKeys = Object.keys(node.children).sort((a, b) => {
+    const nodeA = node.children[a];
+    const nodeB = node.children[b];
+    if (nodeA.type === nodeB.type) return a.localeCompare(b);
+    return nodeA.type === "tree" ? -1 : 1;
+  });
+
+  childrenKeys.forEach(key => {
+    const child = node.children[key];
+    const isFolder = child.type === "tree";
+    const row = document.createElement("div");
+    row.className = "tree-item";
+    if (isFolder) row.classList.add("tree-folder"); else row.classList.add("tree-file");
+    row.style.paddingLeft = (depth * 15 + 10) + "px";
+    
+    let html = "";
+    if (isFolder) html += `<span class="arrow">▶</span> <span class="folder-icon">${child.name}</span>`;
+    else html += `<span class="file-icon">${child.name}</span>`;
+    row.innerHTML = html;
+    wrapper.appendChild(row);
+
+    if (isFolder) {
+      const childrenContainer = document.createElement("div");
+      childrenContainer.className = "tree-children";
+      childrenContainer.appendChild(renderNode(child, depth + 1));
+      wrapper.appendChild(childrenContainer);
+
+      row.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const arrow = row.querySelector(".arrow");
+        const isOpen = childrenContainer.classList.contains("open");
+        if (isOpen) {
+          childrenContainer.classList.remove("open");
+          arrow.classList.remove("open");
+          arrow.textContent = "▶";
+        } else {
+          childrenContainer.classList.add("open");
+          arrow.classList.add("open");
+          arrow.textContent = "▼";
+        }
+      });
+    } else {
+      row.addEventListener("click", () => {
+        // USE NAVIGATE FUNCTION
+        navigateTo(child.path);
+      });
+    }
+  });
+  return wrapper;
+}
+
+/* ===============================
+   3. DEPENDENCY LOGIC
+================================ */
+async function fetchAndCache(filePath) {
+  if (window.projectFiles.has(filePath)) {
+    return { content: window.projectFiles.get(filePath), cached: true };
+  }
+  const targetUrl = `${RAW_BASE}/${REPO}/${COMMIT}/${filePath}`;
+  // const proxyUrl = CORS_PROXY + encodeURIComponent(targetUrl);
+  const proxyUrl = targetUrl;
+  try {
+    const res = await fetch(proxyUrl);
+    if (res.status === 200) {
+      const text = await res.text();
+      window.projectFiles.set(filePath, text);
+      return { content: text, cached: false };
+    }
+  } catch (e) { console.error(e); }
+  return { content: null, cached: false };
+}
+
+function parseImports(code) {
+  const results = [];
+  const lines = code.split("\n");
+  let buffer = "";
+  const logicalLines = [];
+  for (let line of lines) {
+    line = line.split("#")[0].trim(); 
+    if (!line) continue;
+    buffer += " " + line;
+    const openCount = (buffer.match(/\(/g) || []).length;
+    const closeCount = (buffer.match(/\)/g) || []).length;
+    if (openCount === closeCount) {
+      if (buffer.trim()) logicalLines.push(buffer.trim());
+      buffer = "";
+    }
+  }
+  for (let line of logicalLines) {
+    let match = line.match(/^from\s+([\.\w]+)\s+import\s+(.*)/);
+    if (match) { 
+      const source = match[1];
+      let targetsStr = match[2].replace(/[()]/g, ""); 
+      const targets = targetsStr.split(",").map(t => t.trim());
+      let level = 0; let module = source;
+      const dots = source.match(/^(\.+)/);
+      if (dots) { level = dots[1].length; module = source.substring(level); if (!module) module = null; }
+      targets.forEach(t => {
+        const cleanName = t.split(/\s+as\s+/)[0].trim();
+        if (cleanName && cleanName !== '*') results.push({ module, name: cleanName, level });
+      });
+      continue;
+    }
+    match = line.match(/^import\s+(.*)/);
+    if (match) { 
+      const targetsStr = match[1];
+      const targets = targetsStr.split(",").map(t => t.trim());
+      targets.forEach(t => {
+        const cleanName = t.split(/\s+as\s+/)[0].trim();
+        if (cleanName) results.push({ module: cleanName, name: null, level: 0 });
+      });
+    }
+  }
+  return results;
+}
+
+function getDirname(p) { if (!p.includes("/")) return ""; return p.substring(0, p.lastIndexOf("/")); }
+function joinPath(...parts) { return parts.filter(p => p).join("/").replace(/\/+/g, "/"); }
+function getPossibleRoots(currentFile) {
+    const dir = getDirname(currentFile);
+    const parts = dir.split('/').filter(p => p); 
+    const roots = [""]; 
+    for (let i = 0; i < parts.length; i++) { roots.push(parts.slice(0, i + 1).join('/')); }
+    return roots.reverse(); 
+}
+function generateCandidates(imp, currentFile) {
+    const candidates = [];
+    const modParts = imp.module ? imp.module.split(".") : [];
+    let baseDirs = [];
+    if (imp.level > 0) {
+        let baseDir = getDirname(currentFile);
+        for (let i = 1; i < imp.level; i++) baseDir = getDirname(baseDir);
+        baseDirs.push(baseDir);
+    } else { baseDirs = getPossibleRoots(currentFile); }
+    for (const baseDir of baseDirs) {
+        if (imp.name && imp.name !== "*") {
+            const fullParts = [...modParts, imp.name];
+            const path = joinPath(baseDir, ...fullParts);
+            candidates.push(`${path}.py`);
+            candidates.push(`${path}/__init__.py`);
+        }
+        if (modParts.length > 0) {
+            const path = joinPath(baseDir, ...modParts);
+            candidates.push(`${path}.py`);
+            candidates.push(`${path}/__init__.py`);
+        }
+    }
+    return candidates;
+}
+
+function getWordAtClick(e) {
+  if (document.caretRangeFromPoint) {
+    const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+    if (!range) return null;
+    return expandRangeToWord(range);
+  }
+  return null;
+}
+function expandRangeToWord(range) {
+  const node = range.startContainer;
+  const offset = range.startOffset;
+  if (node.nodeType !== Node.TEXT_NODE) return null;
+  const text = node.textContent;
+  const isSeparator = (char) => /[^a-zA-Z0-9_]/.test(char);
+  let start = offset; let end = offset;
+  while (start > 0 && !isSeparator(text[start - 1])) start--;
+  while (end < text.length && !isSeparator(text[end])) end++;
+  return text.substring(start, end).trim();
+}
+function showUsages(word, x, y) {
+  const popup = document.getElementById("usage-popup");
+  if (!word || IGNORED_KEYWORDS.has(word) || !isNaN(word)) { popup.style.display = "none"; return; }
+
+  let resultsHtml = `<div class="usage-header"><span>Usages: "${word}"</span><span class="usage-close" onclick="document.getElementById('usage-popup').style.display='none'">✕</span></div>`;
+  let totalFound = 0;
+
+  for (const [path, content] of window.projectFiles.entries()) {
+    const lines = content.split("\n");
+    const matches = [];
+    lines.forEach((line, index) => {
+      const regex = new RegExp(`\\b${word}\\b`);
+      if (regex.test(line)) {
+        const highlighted = line.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(regex, `<span class="usage-match">${word}</span>`);
+        matches.push({ num: index + 1, raw: line, html: highlighted });
+      }
+    });
+
+    if (matches.length > 0) {
+      totalFound += matches.length;
+      resultsHtml += `<div class="usage-file">${path}</div>`;
+      matches.forEach(m => {
+        const encodedLine = encodeURIComponent(m.raw);
+        // USE NAVIGATE FUNCTION
+        resultsHtml += `<div class="usage-line" onclick="navigateTo('${path}', '${encodedLine}')"><span class="usage-line-num">${m.num}</span>${m.html}</div>`;
+      });
+    }
+  }
+  if (totalFound === 0) resultsHtml += `<div style="padding:10px; color:#8b949e">No usages found in cached files.</div>`;
+
+  popup.innerHTML = resultsHtml;
+  popup.style.display = "block"; 
+  const rect = popup.getBoundingClientRect();
+  const vw = window.innerWidth; const vh = window.innerHeight;
+  let finalX = x + 10; let finalY = y + 10;
+  if (finalX + rect.width > vw) finalX = vw - rect.width - 20;
+  if (finalY + rect.height > vh) finalY = y - rect.height - 10;
+  popup.style.left = finalX + "px"; popup.style.top = finalY + "px";
+}
+
+document.getElementById("code").addEventListener("click", (e) => {
+  if (!e.ctrlKey && !e.metaKey) return; 
+  e.preventDefault();
+  const word = getWordAtClick(e);
+  if (word) showUsages(word, e.clientX, e.clientY);
+});
+document.addEventListener("click", (e) => {
+  const popup = document.getElementById("usage-popup");
+  if (popup.style.display === "block" && !popup.contains(e.target) && !e.ctrlKey) popup.style.display = "none";
+});
+
+/* ===============================
+   4. MAIN EXECUTION
+================================ */
+async function main() {
+  const statusEl = document.getElementById("lbl-status");
+  
+  // Render History Bar Immediately
+  renderHistoryBar();
+
+  if (!REPO || !COMMIT || !PATH) {
+    statusEl.innerText = "Error: Missing params";
+    document.body.innerHTML += "<h2>Missing URL Params</h2>";
+    return;
+  }
+
+  // A. Start Repo Tree Load (Async)
+  loadRepoTree();
+
+  // B. Main Content
+  statusEl.innerText = "Fetching source...";
+  const mainResult = await fetchAndCache(PATH);
+  
+  if (!mainResult.content) {
+    statusEl.innerText = "Error: 404";
+    document.getElementById("code").innerText = `Could not find file at ${PATH}.`;
+    return;
+  }
+
+  document.getElementById("code").textContent = mainResult.content;
+  hljs.highlightElement(document.getElementById("code"));
+
+  // --- NEW: Generate Line Numbers ---
+  // Fix: If the last line is purely empty (trailing newline), don't count it
+  const lines = mainResult.content.split(/\r\n|\r|\n/);
+  let lineCount = lines.length;
+  
+  // Optional: Remove the last line number if the file ends with a newline
+  if (lines[lines.length - 1] === "") {
+    lineCount--;
+  }
+
+  let linesHtml = "";
+  for (let i = 1; i <= lineCount; i++) {
+    linesHtml += `${i}\n`;
+  }
+  document.getElementById("line-numbers").innerText = linesHtml;
+  // ----------------------------------
+
+  if (ELEMENT_VIEW) {
+      const lines = mainResult.content.split("\n");
+      let matchIndex = -1;
+      for (let i = 0; i < lines.length; i++) {
+          if (lines[i] === ELEMENT_VIEW) { matchIndex = i; break; }
+      }
+      if (matchIndex !== -1) {
+          const LINE_HEIGHT = 20;
+          const topOffset = matchIndex * LINE_HEIGHT;
+          const highlighter = document.getElementById("line-highlighter");
+          highlighter.style.display = "block";
+          highlighter.style.top = (topOffset + 20) + "px"; // +20 for padding
+          const container = document.getElementById("code-container");
+          container.scrollTop = topOffset - (container.clientHeight / 2); 
+      }
+  }
+
+  statusEl.innerText = "Analyzing imports...";
+  const imports = parseImports(mainResult.content);
+  const checkedImports = new Set();
+
+  for (const imp of imports) {
+    const dots = ".".repeat(imp.level);
+    const mod = imp.module || "";
+    const nm = imp.name || "";
+    const label = (imp.level === 0 && !imp.name) ? `import ${mod}` : `from ${dots}${mod} import ${nm}`;
+    const uniqueKey = `${imp.level}|${imp.module}|${imp.name}`;
+    if (checkedImports.has(uniqueKey)) continue;
+    checkedImports.add(uniqueKey);
+
+    const candidates = generateCandidates(imp, PATH);
+    let html = `<span class="log-import">${label}</span>`;
+    let found = false;
+    for (const cand of candidates) {
+      const result = await fetchAndCache(cand);
+      if (result.content) {
+        if (result.cached) html += `<span class="log-cached">✔ CACHED: ${cand}</span>`;
+        else { html += `<span class="log-checking">${cand}</span>`; html += `<span class="log-found">✔ FOUND</span>`; }
+        found = true; break; 
+      } else { html += `<span class="log-checking">${cand}</span>`; }
+    }
+    if (!found) html += `<span class="log-lib">➡ Library / Built-in</span>`;
+    log(html);
+  }
+  
+  const count = window.projectFiles.size;
+  statusEl.innerText = `Done. Cached ${count} files.`;
+}
+
+main();
+</script>
+</body>
+</html>
